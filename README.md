@@ -15,8 +15,10 @@ incoming webhook. Scaffolded from the lab's `starter-plugin` template: namespace
 | `src/Channel/` | `Channel` interface, `Result`, `ChannelRegistry`, `TelegramChannel`, `EmailChannel`, `WebhookChannel` |
 | `src/Event/` | `Event`, `EventRegistry`, `EventSource`, `UserEvents` (registration, failed login), `CommentEvents` |
 | `src/Delivery/` | `Router` (what goes out), `Queue` (WP-Cron, retries), `Log` (last 20 attempts) |
-| `src/Admin/SettingsPage.php` | Settings → Notify Telegram: channels, events, test button, delivery log |
-| `admin-ui/`, `package.json`, `vite.config.mjs` | React + antd sources and the Vite build (that screen is being rebuilt on the new settings API) |
+| `src/Admin/AdminPage.php` | The menu: Notify Telegram → Events and Settings, and the React boot on both |
+| `src/Rest/SettingsController.php` | The routes the screen reads and writes through: `/settings`, `/test`, `/log` |
+| `src/Delivery/TestSender.php` | The test button: one message through every configured channel |
+| `admin-ui/`, `package.json`, `vite.config.mjs` | React + antd sources and the Vite build of the screen |
 | `scoper.inc.php` | PHP-Scoper config: the prefix for the vendor namespaces |
 | `bin/build` | Archive builder (`composer build`): prefixed copy + zip into `dist/` |
 | `.github/workflows/build-plugin.yml` | The same build in CI, triggered by a version tag |
@@ -61,18 +63,27 @@ and the validation rules for its message template.
 ## The screen
 
 ```
-Settings → Notify Telegram →  options-general.php?page=notify-telegram   (Settings API)
+Notify Telegram  →  admin.php?page=notify-telegram            Events
+                    admin.php?page=notify-telegram-settings   Settings
 ```
 
-Everything the plugin needs is on that screen: the master switch, one section per channel with the
-fields the channel itself declares, one section per event with its toggle and its message, a test
-button that sends through every configured channel, and the last twenty delivery attempts.
+Two pages under one top-level menu. **Events** lists every registered event with its switch, its message
+and the placeholders that event accepts; **Settings** holds the master switch, one card per channel with
+the fields the channel itself declares, the test button and the last twenty delivery attempts. The state
+lives in the root component, so switching pages never loses an edit and one Save button stores both pages
+— the plugin keeps all of it in a single option anyway.
 
-The React + antd screen (`admin-ui/`) is being rebuilt on the new settings API; its sources, the Vite
-build and the bundle pipeline are still in the tree. The lab's `starter-plugin` keeps a working
-reference of that setup — including the part that is easy to get wrong, that the bundle must be an
-**IIFE**, because `wp_enqueue_script()` prints a classic `<script>` and a classic script cannot parse
-an ES module.
+The menu reuses the parent slug for its first entry: core adds a link back to the parent only when the
+submenu is still empty *and* the slug differs, so passing `MENU_SLUG` as the slug of the first
+`add_submenu_page()` is what makes the menu read exactly "Events" and "Settings" instead of a self-link
+plus one page. Core then names that entry's hook exactly like the top-level page
+(`toplevel_page_notify-telegram`), so the Settings hook is asked for with `get_plugin_page_hookname()`
+rather than read out of the screen list by position.
+
+PHP prints the WordPress heading, the description and the mount element; the application fills the mount
+element and nothing else. The lab's `starter-plugin` keeps a working reference of the build setup —
+including the part that is easy to get wrong, that the bundle must be an **IIFE**, because
+`wp_enqueue_script()` prints a classic `<script>` and a classic script cannot parse an ES module.
 
 Things that are easy to get wrong:
 

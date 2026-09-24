@@ -9,7 +9,7 @@ declare(strict_types=1);
 
 namespace Wpseed\NotifyTelegram;
 
-use Wpseed\NotifyTelegram\Admin\SettingsPage;
+use Wpseed\NotifyTelegram\Admin\AdminPage;
 use Wpseed\NotifyTelegram\Channel\Channel;
 use Wpseed\NotifyTelegram\Channel\ChannelRegistry;
 use Wpseed\NotifyTelegram\Channel\EmailChannel;
@@ -18,10 +18,12 @@ use Wpseed\NotifyTelegram\Channel\WebhookChannel;
 use Wpseed\NotifyTelegram\Delivery\Log;
 use Wpseed\NotifyTelegram\Delivery\Queue;
 use Wpseed\NotifyTelegram\Delivery\Router;
+use Wpseed\NotifyTelegram\Delivery\TestSender;
 use Wpseed\NotifyTelegram\Event\CommentEvents;
 use Wpseed\NotifyTelegram\Event\EventRegistry;
 use Wpseed\NotifyTelegram\Event\EventSource;
 use Wpseed\NotifyTelegram\Event\UserEvents;
+use Wpseed\NotifyTelegram\Rest\SettingsController;
 use Wpseed\NotifyTelegram\Settings\Settings;
 
 /**
@@ -219,7 +221,15 @@ final class Plugin {
 		// and loading a text domain before init is an error since WordPress 6.7.
 		add_action( 'init', array( $this, 'register_sources' ) );
 
-		( new SettingsPage( $this->settings, $this->channels, $this->events, $this->log ) )->register();
+		( new AdminPage( $this->file ) )->register();
+
+		( new SettingsController(
+			$this->settings,
+			$this->channels,
+			$this->events,
+			$this->log,
+			new TestSender( $this->channels, $this->log )
+		) )->register();
 
 		register_activation_hook( $this->file, array( $this, 'activate' ) );
 	}

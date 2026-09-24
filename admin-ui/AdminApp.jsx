@@ -1,99 +1,179 @@
-import { ReloadOutlined, SaveOutlined } from '@ant-design/icons';
-import { Alert, App, Button, Card, Flex, Form, Input, Popconfirm, Skeleton, Space, Tag, Typography } from 'antd';
-import { useCallback, useEffect, useState } from 'react';
+/**
+ * The plugin's screen: one state, two pages.
+ *
+ * The state is loaded and kept here rather than inside each page, so switching between Events and
+ * Settings never loses an edit and one Save button stores everything — the plugin keeps all of it in a
+ * single option anyway.
+ */
+import { App as AntApp, Alert, Button, Space, Spin, Tabs, Typography } from 'antd';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
-import { getSettings, saveSettings } from './api.js';
-import GreetingPreview from './components/GreetingPreview.jsx';
-import { DEFAULT_TEMPLATE, PLACEHOLDER, validateTemplate } from './greeting.js';
+import * as api from './api.js';
+import EventsPage from './pages/EventsPage.jsx';
+import SettingsPage from './pages/SettingsPage.jsx';
+
+const { Text } = Typography;
 
 /**
- * Settings screen: reads the stored values from the REST API, edits them and writes them back.
+ * Turns the loaded state into the shape the REST route stores.
+ *
+ * @param {Object} state Loaded state with the full channel and event objects.
+ * @return {Object} Submitted payload.
+ */
+function toPayload( state ) {
+	const channels = {};
+	const events = {};
+	const templates = {};
+
+	state.channels.forEach( ( channel ) => {
+		const values = { enabled: channel.enabled };
+
+		channel.fields.forEach( ( field ) => {
+			values[ field.name ] = field.value;
+		} );
+
+		channels[ channel.id ] = values;
+	} );
+
+	state.events.forEach( ( event ) => {
+		events[ event.id ] = event.enabled;
+		templates[ event.id ] = event.template;
+	} );
+
+	return { enabled: state.enabled, channels, events, templates };
+}
+
+/**
+ * The application.
  *
  * @param {Object} props        Component props.
- * @param {Object} props.config Bootstrap data passed by PHP.
- * @return {JSX.Element} Rendered screen.
+ * @param {Object} props.config Configuration printed by PHP.
+ * @return {JSX.Element} Rendered output.
  */
 export default function AdminApp( { config } ) {
-	const { message } = App.useApp();
-	const [ form ] = Form.useForm();
-
-	const defaults = config.defaults ?? { template: DEFAULT_TEMPLATE };
-	const shortcode = config.shortcode ?? 'notify_telegram_hello';
-
+	const { message } = AntApp.useApp();
+	const [ state, setState ] = useState( null );
+	const [ draft, setDraft ] = useState( null );
 	const [ loading, setLoading ] = useState( true );
 	const [ saving, setSaving ] = useState( false );
-	const [ loadError, setLoadError ] = useState( null );
-	const [ savedTemplate, setSavedTemplate ] = useState( defaults.template );
-	const [ sampleName, setSampleName ] = useState( config.sampleName ?? 'John' );
+	const [ error, setError ] = useState( null );
+	const [ tab, setTab ] = useState( config.page === 'settings' ? 'settings' : 'events' );
 
-	// The live field value drives the preview, so there is one source of truth for the form.
-	const template = Form.useWatch( 'template', form ) ?? '';
-	const templateError = validateTemplate( template );
-	const dirty = template !== savedTemplate;
-
-	/**
-	 * Loads the settings from the server.
-	 *
-	 * @return {Promise<void>} Resolves when the request finished.
-	 */
 	const load = useCallback( async () => {
 		setLoading( true );
-		setLoadError( null );
 
 		try {
-			const settings = await getSettings();
-
-			form.setFieldsValue( { template: settings.template } );
-			setSavedTemplate( settings.template );
-		} catch ( error ) {
-			setLoadError( error.message );
+			const loaded = await api.getState();
+			setState( loaded );
+			setDraft( loaded );
+			setError( null );
+		} catch ( requestError ) {
+			setError( requestError.message );
 		} finally {
 			setLoading( false );
 		}
-	}, [ form ] );
+	}, [] );
 
 	useEffect( () => {
 		load();
 	}, [ load ] );
 
+	const dirty = useMemo(
+		() => Boolean( state && draft ) && JSON.stringify( state ) !== JSON.stringify( draft ),
+		[ state, draft ]
+	);
+
 	/**
-	 * Validates the form and stores the settings.
+	 * Switches pages and keeps the address bar in step, so a reload opens the same page and the
+	 * WordPress menu highlights it.
 	 *
-	 * @return {Promise<void>} Resolves when the request finished.
+	 * @param {string} key Tab key.
 	 */
+	const changeTab = ( key ) => {
+		setTab( key );
+
+		const url = new URL( window.location.href );
+		url.searchParams.set( 'page', key === 'settings' ? config.settingsSlug : config.eventsSlug );
+		window.history.replaceState( {}, '', url );
+	};
+
 	const save = async () => {
-		const values = await form.validateFields().catch( () => null );
-
-		if ( null === values ) {
-			return;
-		}
-
 		setSaving( true );
 
 		try {
-			const settings = await saveSettings( { template: values.template } );
-
-			form.setFieldsValue( { template: settings.template } );
-			setSavedTemplate( settings.template );
+			const saved = await api.saveSettings( toPayload( draft ) );
+			setState( saved );
+			setDraft( saved );
 			message.success( 'Settings saved.' );
-		} catch ( error ) {
-			message.error( error.message );
+		} catch ( requestError ) {
+			message.error( requestError.message );
 		} finally {
 			setSaving( false );
 		}
 	};
 
-	if ( loading ) {
-		return <Skeleton active paragraph={ { rows: 5 } } />;
+	/**
+	 * Applies a change to one event.
+	 *
+	 * @param {string} id      Event identifier.
+	 * @param {Object} changes Fields to merge.
+	 */
+	const updateEvent = ( id, changes ) => {
+		setDraft( ( current ) => ( {
+			...current,
+			events: current.events.map( ( event ) => ( event.id === id ? { ...event, ...changes } : event ) ),
+		} ) );
+	};
+
+	/**
+	 * Applies a change to one channel.
+	 *
+	 * @param {string} id      Channel identifier.
+	 * @param {Object} changes Fields to merge.
+	 */
+	const updateChannel = ( id, changes ) => {
+		setDraft( ( current ) => ( {
+			...current,
+			channels: current.channels.map( ( channel ) =>
+				channel.id === id ? { ...channel, ...changes } : channel
+			),
+		} ) );
+	};
+
+	/**
+	 * Applies a change to one field of one channel.
+	 *
+	 * @param {string} id    Channel identifier.
+	 * @param {string} name  Field name.
+	 * @param {string} value New value.
+	 */
+	const updateChannelField = ( id, name, value ) => {
+		setDraft( ( current ) => ( {
+			...current,
+			channels: current.channels.map( ( channel ) =>
+				channel.id === id
+					? {
+							...channel,
+							fields: channel.fields.map( ( field ) =>
+								field.name === name ? { ...field, value } : field
+							),
+					  }
+					: channel
+			),
+		} ) );
+	};
+
+	if ( loading && ! draft ) {
+		return <Spin size="large" />;
 	}
 
-	if ( loadError ) {
+	if ( error ) {
 		return (
 			<Alert
 				type="error"
 				showIcon
-				message="The settings could not be loaded"
-				description={ loadError }
+				message="The plugin state could not be loaded"
+				description={ error }
 				action={
 					<Button size="small" onClick={ load }>
 						Try again
@@ -103,66 +183,54 @@ export default function AdminApp( { config } ) {
 		);
 	}
 
+	if ( ! draft ) {
+		return null;
+	}
+
 	return (
-		<Flex vertical gap={ 16 }>
-			<Card
-				title="Notify Telegram settings"
-				extra={
-					config.version && <Tag color="blue">{ `v${ config.version }` }</Tag>
-				}
-			>
-				<Form form={ form } layout="vertical" initialValues={ { template: defaults.template } }>
-					<Form.Item
-						label="Greeting template"
-						name="template"
-						extra={ `The ${ PLACEHOLDER } placeholder is replaced with the name; without it the name is appended at the end.` }
-						rules={ [
-							{
-								// The same rules the REST route enforces, so a rejected value never leaves the form.
-								validator: ( _, value ) => {
-									const error = validateTemplate( value );
-
-									return error ? Promise.reject( new Error( error ) ) : Promise.resolve();
-								},
-							},
-						] }
-					>
-						<Input placeholder={ DEFAULT_TEMPLATE } maxLength={ 200 } allowClear />
-					</Form.Item>
-
+		<>
+			<Tabs
+				activeKey={ tab }
+				onChange={ changeTab }
+				style={ { marginTop: 16 } }
+				tabBarExtraContent={
 					<Space>
-						<Button
-							type="primary"
-							icon={ <SaveOutlined /> }
-							loading={ saving }
-							// A value the server would reject never leaves the form.
-							disabled={ ! dirty || null !== templateError }
-							onClick={ save }
-						>
+						{ dirty && <Text type="warning">Unsaved changes</Text> }
+						<Button onClick={ load } loading={ loading }>
+							Reload
+						</Button>
+						<Button type="primary" onClick={ save } loading={ saving } disabled={ ! dirty }>
 							Save changes
 						</Button>
-
-						<Popconfirm
-							title="Replace the template with the plugin default?"
-							description={ `The default is "${ defaults.template }". Nothing is stored until you save.` }
-							okText="Replace"
-							cancelText="Cancel"
-							onConfirm={ () => form.setFieldsValue( { template: defaults.template } ) }
-						>
-							<Button icon={ <ReloadOutlined /> }>Restore the default</Button>
-						</Popconfirm>
-
-						{ dirty && <Typography.Text type="warning">Unsaved changes</Typography.Text> }
 					</Space>
-				</Form>
-			</Card>
-
-			<GreetingPreview
-				template={ template }
-				sampleName={ sampleName }
-				onNameChange={ setSampleName }
-				shortcode={ shortcode }
+				}
+				items={ [
+					{
+						key: 'events',
+						label: 'Events',
+						children: (
+							<EventsPage
+								events={ draft.events }
+								onToggle={ ( id, enabled ) => updateEvent( id, { enabled } ) }
+								onTemplate={ ( id, template ) => updateEvent( id, { template } ) }
+							/>
+						),
+					},
+					{
+						key: 'settings',
+						label: 'Settings',
+						children: (
+							<SettingsPage
+								state={ draft }
+								onMasterSwitch={ ( enabled ) => setDraft( ( current ) => ( { ...current, enabled } ) ) }
+								onChannelToggle={ ( id, enabled ) => updateChannel( id, { enabled } ) }
+								onChannelField={ updateChannelField }
+								onLogChange={ ( log ) => setDraft( ( current ) => ( { ...current, log } ) ) }
+							/>
+						),
+					},
+				] }
 			/>
-		</Flex>
+		</>
 	);
 }

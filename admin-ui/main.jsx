@@ -2,7 +2,7 @@
  * Entry point of the plugin's React admin application.
  *
  * The container and the bootstrap data are rendered by PHP: `#notify-telegram-admin-root` in the page
- * markup and `window.starterPluginAdmin` through wp_add_inline_script().
+ * markup and `window.notifyTelegramAdmin` through wp_add_inline_script().
  */
 import { App as AntApp, ConfigProvider } from 'antd';
 import { StrictMode } from 'react';
@@ -13,7 +13,7 @@ import ErrorBoundary from './components/ErrorBoundary.jsx';
 import './styles.css';
 
 const container = document.getElementById( 'notify-telegram-admin-root' );
-const config = window.starterPluginAdmin ?? {};
+const config = window.notifyTelegramAdmin ?? {};
 
 if ( container ) {
 	createRoot( container ).render(

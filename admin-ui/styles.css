@@ -1,9 +1,19 @@
 /**
- * The screen is rendered inside the WordPress admin, so these rules only touch the plugin's own
- * container: no global resets, no changes to WordPress styles.
+ * Small adjustments on top of the WordPress admin styles.
+ *
+ * Only layout: colours, fonts and form controls come from WordPress and from antd's own theme, so the
+ * screen keeps looking like part of the admin after a WordPress update.
  */
-
 #notify-telegram-admin-root {
-	max-width: 760px;
-	margin: 16px 0;
+	margin-top: 8px;
+}
+
+#notify-telegram-admin-root .ant-tabs-nav {
+	margin-bottom: 16px;
+}
+
+#notify-telegram-admin-root code {
+	background: #f0f0f1;
+	padding: 1px 4px;
+	border-radius: 3px;
 }

@@ -1,8 +1,8 @@
 /**
  * Thin wrapper around the plugin's REST API.
  *
- * The root URL and the nonce come from PHP (window.starterPluginAdmin), so the app never hardcodes
- * a path and always sends the cookie-authenticated request WordPress expects.
+ * The root URL and the nonce come from PHP (window.notifyTelegramAdmin), so the application never
+ * hardcodes a path and always sends the cookie-authenticated request WordPress expects.
  */
 
 /**
@@ -13,7 +13,7 @@
  * @return {Promise<Object>} Parsed response body.
  */
 export async function request( path, options = {} ) {
-	const { apiRoot, nonce } = window.starterPluginAdmin ?? {};
+	const { apiRoot, nonce } = window.notifyTelegramAdmin ?? {};
 
 	const response = await fetch( `${ apiRoot }${ path }`, {
 		credentials: 'same-origin',
@@ -35,23 +35,41 @@ export async function request( path, options = {} ) {
 }
 
 /**
- * Reads the plugin settings.
+ * Reads the whole plugin state.
  *
- * @return {Promise<Object>} Settings object.
+ * @return {Promise<Object>} State: switches, channels, events and the log.
  */
-export function getSettings() {
+export function getState() {
 	return request( '/settings' );
 }
 
 /**
- * Stores the plugin settings.
+ * Stores the settings.
  *
  * @param {Object} settings Settings to store.
- * @return {Promise<Object>} Settings as saved by the server.
+ * @return {Promise<Object>} State as saved by the server.
  */
 export function saveSettings( settings ) {
 	return request( '/settings', {
 		method: 'POST',
 		body: JSON.stringify( settings ),
 	} );
+}
+
+/**
+ * Sends a test message through every configured channel.
+ *
+ * @return {Promise<Object>} Per-channel results and the updated log.
+ */
+export function sendTest() {
+	return request( '/test', { method: 'POST' } );
+}
+
+/**
+ * Empties the delivery log.
+ *
+ * @return {Promise<Object>} The empty log.
+ */
+export function clearLog() {
+	return request( '/log', { method: 'DELETE' } );
 }
