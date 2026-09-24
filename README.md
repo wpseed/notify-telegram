@@ -1,26 +1,22 @@
 # Notify Telegram
 
-Telegram notifications for WordPress events — a clean-room rewrite of the notification-plugin idea,
-scaffolded from the lab's `starter-plugin` template: namespace `Wpseed\NotifyTelegram`, text domain
-`notify-telegram`, package `wpseed/notify-telegram`.
-
-The event sources and the channel layer are being built on top of this scaffold, so the greeting
-shortcode, the settings page and the React screen below are still the template's demo features.
+Notifications for WordPress events, delivered to the channels you configure: Telegram, email or any
+incoming webhook. Scaffolded from the lab's `starter-plugin` template: namespace
+`Wpseed\NotifyTelegram`, text domain `notify-telegram`, package `wpseed/notify-telegram`.
 
 ## What is inside
 
 | File / directory | Purpose |
 | --- | --- |
 | `notify-telegram.php` | Plugin header, autoloader include, `Plugin::boot()` |
-| `src/Plugin.php` | Singleton entry point: hook registration, settings, activation |
-| `src/Greeting.php` | Pure greeting logic (no WordPress — easy to unit test) |
-| `src/Shortcode/HelloShortcode.php` | `[notify_telegram_hello name="John"]` shortcode |
-| `src/Admin/SettingsPage.php` | Settings → Notify Telegram (the classic Settings API form) |
-| `src/Admin/AdminPage.php` | Top-level screen `Notify Telegram`: prints the mount element, enqueues the bundle |
-| `src/Rest/SettingsController.php` | REST route `notify-telegram/v1/settings`, used by the React application |
-| `admin-ui/` | React + antd sources of that screen |
-| `assets/admin/` | Built bundle (gitignored — produced by `npm run build`) |
-| `package.json`, `vite.config.mjs` | Front-end dependencies and the Vite build |
+| `src/Plugin.php` | Singleton entry point: builds the objects, registers the hooks, activation |
+| `src/Message.php` | The text that leaves the site: `%placeholder%` rendering and validation |
+| `src/Settings/Settings.php` | The single option: switches, channel values, message templates |
+| `src/Channel/` | `Channel` interface, `Result`, `ChannelRegistry`, `TelegramChannel`, `EmailChannel`, `WebhookChannel` |
+| `src/Event/` | `Event`, `EventRegistry`, `EventSource`, `UserEvents` (registration, failed login), `CommentEvents` |
+| `src/Delivery/` | `Router` (what goes out), `Queue` (WP-Cron, retries), `Log` (last 20 attempts) |
+| `src/Admin/SettingsPage.php` | Settings → Notify Telegram: channels, events, test button, delivery log |
+| `admin-ui/`, `package.json`, `vite.config.mjs` | React + antd sources and the Vite build (that screen is being rebuilt on the new settings API) |
 | `scoper.inc.php` | PHP-Scoper config: the prefix for the vendor namespaces |
 | `bin/build` | Archive builder (`composer build`): prefixed copy + zip into `dist/` |
 | `.github/workflows/build-plugin.yml` | The same build in CI, triggered by a version tag |
@@ -46,23 +42,37 @@ npm run build             # bundle the admin screen into assets/admin/
 npm run watch             # same, rebuilding on every change
 ```
 
-## The admin screen (React + antd)
-
-The plugin has two screens that edit the same option: the classic Settings API form above, kept as a
-reference, and a React application that is the screen to extend.
+## Events, channels and delivery
 
 ```
-Notify Telegram            →  admin.php?page=notify-telegram-admin   (React + antd)
-Settings → Notify Telegram →  options-general.php?page=notify-telegram (Settings API)
+WordPress hook  →  EventSource  (declares the event, fills its placeholders)
+                →  Router       (master switch, event toggle, channels that are enabled and configured)
+                →  Queue        (one WP-Cron event per channel, retries, log)
+                →  Channel      (Telegram / email / webhook)
 ```
 
-| Part | Where |
-| --- | --- |
-| Sources | `admin-ui/` — `main.jsx` mounts, `AdminApp.jsx` is the screen, `greeting.js` mirrors the PHP formatting |
-| Build | `npm run build` → `assets/admin/` (gitignored; the release archive gets it in CI) |
-| Enqueue | `src/Admin/AdminPage.php` reads `assets/admin/.vite/manifest.json` and loads the hashed entry on that screen only |
-| Configuration | `window.starterPluginAdmin`, printed with `wp_add_inline_script`: REST root, `wp_rest` nonce, version, defaults |
-| API | `src/Rest/SettingsController.php` — `notify-telegram/v1/settings`: GET reads, POST writes, `manage_options` required |
+Adding a channel is one class: implement `Channel` (`id`, `label`, `fields`, `is_configured`, `send`)
+and add it to the array in `Plugin::create_channels()`, or hand it in through the
+`notify_telegram_channels` filter. `fields()` is what the settings screen renders, so a channel brings
+its own form. Adding an event is one class too: implement `EventSource` and register it through the
+`notify_telegram_event_sources` filter — the placeholders an event declares are both its documentation
+and the validation rules for its message template.
+
+## The screen
+
+```
+Settings → Notify Telegram →  options-general.php?page=notify-telegram   (Settings API)
+```
+
+Everything the plugin needs is on that screen: the master switch, one section per channel with the
+fields the channel itself declares, one section per event with its toggle and its message, a test
+button that sends through every configured channel, and the last twenty delivery attempts.
+
+The React + antd screen (`admin-ui/`) is being rebuilt on the new settings API; its sources, the Vite
+build and the bundle pipeline are still in the tree. The lab's `starter-plugin` keeps a working
+reference of that setup — including the part that is easy to get wrong, that the bundle must be an
+**IIFE**, because `wp_enqueue_script()` prints a classic `<script>` and a classic script cannot parse
+an ES module.
 
 Things that are easy to get wrong:
 
@@ -76,8 +86,27 @@ Things that are easy to get wrong:
   refuses a bundle that looks like a module, and an IIFE keeps the CSS inside the bundle, which is fine.
 - `wp_add_inline_script()` replaces `wp_localize_script()` here: it keeps the types of the values, so the
   application receives an object rather than strings.
-- The template field enforces the same rules as the REST route — `%s` at most once, no other `%` pattern —
-  so a value that would render as garbage (`Hi %d!` → `Hi 0!`) or throw inside `sprintf()` cannot be saved.
+- **Message templates are `%name%` tokens, not `printf` specifiers.** `Message::validate_template()`
+  rejects an unknown placeholder and a stray `%` when the form is saved, and the rejected field keeps
+  the value that was stored before. The matching WPCS sniff is excluded in `phpcs.xml.dist` because it
+  reads the `%d` inside `%display_name%` as a printf specifier and asks for `%1$d` — and `phpcbf`
+  happily "fixes" it into `%1$display_name%`.
+- **Translated strings belong on `init`.** The event sources register their titles and default messages
+  on `init` (`Plugin::register_sources()`): loading a text domain before `init` is an error since
+  WordPress 6.7 and shows up as `_load_textdomain_just_in_time was called incorrectly`.
+- **`wp_schedule_single_event()` drops a second identical event within ten minutes.** Two identical
+  messages (the same comment text twice, a repeated test message) would silently collapse into one, so
+  every queued payload carries a unique token.
+- **Delivery is deferred on purpose.** A 15 second HTTP timeout in the middle of a registration, a
+  comment or a checkout is worse than a late notification. The queue retries three times with a growing
+  pause and only then writes the failure to the log; the `notify_telegram_send_async` filter (`false`)
+  makes the tests deliver inside the request.
+- **Telegram gets plain text.** A parse mode would turn every value the site interpolates (a customer
+  name, a comment excerpt) into a parsing hazard, and Telegram answers a broken entity with a 400
+  instead of the message. The webhook channel is the JSON one, with an optional HMAC-SHA256 signature.
+- **A channel with an empty field is skipped, not reported.** A fresh install is not an error: the
+  settings screen shows such a channel as *not configured yet*, and the router logs `Skipped: no channel
+  is enabled and configured` when a real event finds nothing to send through.
 - Cookie-authenticated REST requests need the `X-WP-Nonce` header; the application sends the nonce from its
   configuration. The integration tests cover the capability check, the nonce itself is verified against the
   live screen (the test environment authenticates through the current-user global and bypasses it).

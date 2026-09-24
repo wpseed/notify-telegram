@@ -21,6 +21,15 @@
     <rule ref="PHPCompatibilityWP"/>
 
     <!--
+        Message templates use %name% tokens, which this sniff reads as printf specifiers: it sees %d
+        in %display_name% and asks for ordered %1$d/%2$s arguments. Templates are validated against
+        the placeholders their event declares (Message::validate_template) instead.
+    -->
+    <rule ref="WordPress.WP.I18n">
+        <exclude name="WordPress.WP.I18n.UnorderedPlaceholdersText"/>
+    </rule>
+
+    <!--
         Guard against collisions with other plugins: everything declared in the global
         namespace (functions, constants, classes, hooks, options) must start with one of
         the prefixes below. The plugin's own code lives in the Wpseed\NotifyTelegram namespace.

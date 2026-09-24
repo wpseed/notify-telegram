@@ -5,64 +5,54 @@ declare(strict_types=1);
 namespace Wpseed\NotifyTelegram\Tests\Integration;
 
 use Wpseed\NotifyTelegram\Admin\SettingsPage;
-use Wpseed\NotifyTelegram\Greeting;
+use Wpseed\NotifyTelegram\Delivery\Log;
 use Wpseed\NotifyTelegram\Plugin;
+use Wpseed\NotifyTelegram\Settings\Settings;
+use Wpseed\NotifyTelegram\Tests\Fakes\RecordingChannel;
 use WP_UnitTestCase;
 
 /**
- * Integration tests for the plugin lifecycle: activation, settings, registration of
- * the admin page.
+ * Plugin lifecycle: loading, activation, the settings screen and its test button.
  */
 final class PluginLifecycleTest extends WP_UnitTestCase
 {
-    public function test_activation_adds_the_default_template_option(): void
+    public function set_up(): void
     {
-        delete_option(Plugin::OPTION_TEMPLATE);
+        parent::set_up();
 
-        $plugin = Plugin::instance();
-        self::assertNotNull($plugin, 'The plugin must be loaded by the test bootstrap');
-
-        $plugin->activate();
-
-        self::assertSame(Greeting::DEFAULT_TEMPLATE, get_option(Plugin::OPTION_TEMPLATE));
+        delete_option(Settings::OPTION);
+        delete_option(Log::OPTION);
     }
 
-    public function test_activation_does_not_overwrite_existing_option(): void
+    public function test_the_plugin_is_loaded_by_the_test_bootstrap(): void
     {
-        update_option(Plugin::OPTION_TEMPLATE, 'Hi, %s!');
+        self::assertNotNull(Plugin::instance(), 'The plugin must be loaded by the test bootstrap');
+    }
+
+    public function test_activation_adds_the_settings_option(): void
+    {
+        Plugin::instance()?->activate();
+
+        self::assertSame(Settings::defaults(), get_option(Settings::OPTION));
+    }
+
+    public function test_activation_does_not_overwrite_stored_settings(): void
+    {
+        update_option(Settings::OPTION, ['enabled' => false]);
 
         Plugin::instance()?->activate();
 
-        self::assertSame('Hi, %s!', get_option(Plugin::OPTION_TEMPLATE));
+        self::assertSame(['enabled' => false], get_option(Settings::OPTION));
     }
 
-    public function test_greeting_uses_the_stored_option(): void
+    public function test_settings_page_is_registered_under_the_settings_menu(): void
     {
-        update_option(Plugin::OPTION_TEMPLATE, 'Howdy, %s!');
-
-        self::assertSame('Howdy, Jane!', Plugin::instance()?->greeting('Jane'));
-    }
-
-    public function test_blank_option_falls_back_to_default_template(): void
-    {
-        update_option(Plugin::OPTION_TEMPLATE, '   ');
-
-        self::assertSame(Greeting::format('John'), Plugin::instance()?->greeting('John'));
-    }
-
-    public function test_settings_page_is_registered_under_settings_menu(): void
-    {
-        // add_submenu_page() returns false when the current user lacks the capability,
-        // so the test has to log in as an administrator explicitly.
         wp_set_current_user(self::factory()->user->create(['role' => 'administrator']));
         $GLOBALS['submenu'] = [];
 
-        (new SettingsPage())->register();
         do_action('admin_menu');
 
-        // Submenu items are stored under numeric keys with the slug in element [2],
-        // so we look the slug up by value — the way WordPress' own tests do it.
-        self::assertContains(SettingsPage::MENU_SLUG, self::settingsSubmenuSlugs());
+        self::assertContains(SettingsPage::MENU_SLUG, self::submenu_slugs());
     }
 
     public function test_settings_page_is_not_registered_for_subscribers(): void
@@ -70,16 +60,73 @@ final class PluginLifecycleTest extends WP_UnitTestCase
         wp_set_current_user(self::factory()->user->create(['role' => 'subscriber']));
         $GLOBALS['submenu'] = [];
 
-        (new SettingsPage())->register();
         do_action('admin_menu');
 
-        self::assertNotContains(SettingsPage::MENU_SLUG, self::settingsSubmenuSlugs());
+        self::assertNotContains(SettingsPage::MENU_SLUG, self::submenu_slugs());
+    }
+
+    public function test_a_template_with_an_unknown_placeholder_is_rejected(): void
+    {
+        $clean = self::page()->sanitize(['templates' => ['user_registered' => 'Hi %nmae%']]);
+
+        self::assertNotSame('Hi %nmae%', $clean['templates']['user_registered']);
+    }
+
+    public function test_a_valid_template_is_kept(): void
+    {
+        $clean = self::page()->sanitize(['templates' => ['user_registered' => 'Hi %user_login%']]);
+
+        self::assertSame('Hi %user_login%', $clean['templates']['user_registered']);
+    }
+
+    public function test_sanitize_strips_markup_from_channel_fields(): void
+    {
+        $clean = self::page()->sanitize([
+            'channels' => ['telegram' => ['token' => '<b>123:abc</b>', 'enabled' => '1']],
+        ]);
+
+        self::assertSame('123:abc', $clean['channels']['telegram']['token']);
+        self::assertTrue($clean['channels']['telegram']['enabled']);
+    }
+
+    public function test_the_test_button_reports_when_no_channel_is_configured(): void
+    {
+        self::assertSame([], self::page()->run_test());
+    }
+
+    public function test_the_test_button_sends_through_a_configured_channel(): void
+    {
+        $plugin = Plugin::instance();
+        $recorder = new RecordingChannel('recorder');
+
+        try {
+            $plugin->channels()->register($recorder);
+
+            $results = self::page()->run_test();
+
+            self::assertCount(1, $results);
+            self::assertTrue($results[0]['ok']);
+            self::assertStringContainsString('Test message from', $recorder->last_text());
+            self::assertSame('test', $plugin->log()->entries()[0]['event']);
+        } finally {
+            $plugin->channels()->unregister('recorder');
+        }
+    }
+
+    /**
+     * Settings screen built on the objects the plugin booted with.
+     */
+    private static function page(): SettingsPage
+    {
+        $plugin = Plugin::instance();
+
+        return new SettingsPage($plugin->settings(), $plugin->channels(), $plugin->events(), $plugin->log());
     }
 
     /**
      * @return list<string>
      */
-    private static function settingsSubmenuSlugs(): array
+    private static function submenu_slugs(): array
     {
         $items = $GLOBALS['submenu']['options-general.php'] ?? [];
 
@@ -87,13 +134,5 @@ final class PluginLifecycleTest extends WP_UnitTestCase
             static fn (array $item): string => (string) ($item[2] ?? ''),
             is_array($items) ? $items : []
         )));
-    }
-
-    public function test_sanitize_callback_replaces_blank_input(): void
-    {
-        $page = new SettingsPage();
-
-        self::assertSame(Greeting::DEFAULT_TEMPLATE, $page->sanitize('  '));
-        self::assertSame('Hi, %s!', $page->sanitize(' Hi, %s! '));
     }
 }
