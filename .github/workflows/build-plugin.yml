@@ -1,9 +1,9 @@
 name: Build plugin archive
 
 # The shippable archive is built here: `npm run build` produces the React admin bundle into
-# assets/admin/, then `composer build` installs the runtime dependencies, prefixes their namespaces
-# with PHP-Scoper and zips the result. The same commands work on the Windows dev machine (PHP-Scoper
-# runs there), so CI is convenience, not the only path.
+# assets/admin/, then `composer build` copies the plugin without the development files, installs
+# its runtime dependencies into that copy and zips it. The same commands work on the Windows dev
+# machine, so CI is convenience, not the only path.
 #
 # Triggers: a pushed version tag (v1.2.3) or a manual run from the Actions tab.
 on:
@@ -30,7 +30,7 @@ jobs:
           coverage: none
           tools: composer
 
-      # bin/build needs its own tooling (PHP-Scoper) plus the plugin's runtime dependencies.
+      # bin/build regenerates the artifact's autoloader with the project's own tooling.
       - name: Install development dependencies
         run: composer install --no-interaction --no-progress --prefer-dist
 

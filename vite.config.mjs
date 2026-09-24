@@ -22,9 +22,9 @@ export default defineConfig( {
 		assetsDir: '',
 
 		// The manifest lands at assets/<dir>/manifest.json, at the top of the output directory and without
-		// a dot in its name. Vite's own default is assets/<dir>/.vite/manifest.json, and PHP-Scoper —
-		// which the archive build runs the tree through — collects its files with Symfony Finder, whose
-		// default is to skip dot-files: the manifest disappeared from the shipped plugin silently.
+		// a dot in its name. Vite's own default is assets/<dir>/.vite/manifest.json — a hidden directory
+		// that tools walking the tree can skip (Symfony Finder does, by default), and a build that loses
+		// the manifest ships a plugin whose screen never loads.
 		manifest: 'manifest.json',
 
 		rollupOptions: {

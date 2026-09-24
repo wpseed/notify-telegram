@@ -3,14 +3,14 @@
 /**
  * Builds the installable plugin archive.
  *
- * 1. copies the plugin into build-src/, leaving out the development-only files;
- * 2. installs the runtime dependencies there (composer install --no-dev);
- * 3. prefixes their namespaces with PHP-Scoper into dist/<slug>/;
- * 4. regenerates that copy's autoloader, strips the leftover Composer metadata and zips it.
+ * 1. copies the plugin into dist/<slug>/, leaving out the development-only files;
+ * 2. runs composer install --no-dev there, so the artifact carries runtime dependencies only
+ *    (today that is none) and its own generated autoloader;
+ * 3. strips the Composer metadata, verifies that nothing development-only got in, and zips it.
  *
  * Usage: composer build      (equivalently: php bin/build)
  *
- * The source tree is never modified: the prefixed code lives in dist/ only.
+ * The source tree is never modified: the archive is assembled in dist/ only.
  *
  * @package NotifyTelegram
  */
@@ -34,13 +34,11 @@ const EXCLUDED_FROM_ARTIFACT = array(
 	'phpcs.xml.dist',
 	'phpunit.xml.dist',
 	'README.md',
-	'scoper.inc.php',
 	'vite.config.mjs',
 );
 
 $root = dirname(__DIR__);
 $slug = basename($root);
-$scratch = $root . '/build-src';
 $output = $root . '/dist/' . $slug;
 $archive = $root . '/dist/' . $slug . '.zip';
 
@@ -251,34 +249,21 @@ function list_files( string $path ): array {
 	return $files;
 }
 
-/**
- * Files below a directory as paths relative to it, with forward slashes.
- *
- * @param string $path Directory to list.
- * @param string $root Directory the paths are made relative to.
- * @return list<string>
- */
-function relative_files( string $path, string $root ): array {
-	$relative = array();
-
-	foreach ( list_files( $path ) as $file ) {
-		$relative[] = str_replace( '\\', '/', substr( $file, strlen( $root ) + 1 ) );
-	}
-
-	sort( $relative );
-
-	return $relative;
-}
-
 $composer = composer_command();
 
 echo "Plugin: {$slug}\n";
 echo "Source: {$root}\n\n";
 
-// 1. A scratch copy without the development-only files.
-remove_tree( $scratch );
+// 1. The artifact starts as a copy of the plugin without the development-only files. The copy is
+// needed because composer install runs inside it. The previous archive goes first: a build that
+// fails halfway must not leave something behind that looks like the current one.
 remove_tree( $output );
-mkdir( $scratch, 0o755, true );
+
+if ( is_file( $archive ) ) {
+	unlink( $archive );
+}
+
+mkdir( $output, 0o755, true );
 
 foreach ( scandir( $root ) as $entry ) {
 	if ( '.' === $entry || '..' === $entry || in_array( $entry, EXCLUDED_FROM_ARTIFACT, true ) ) {
@@ -288,74 +273,39 @@ foreach ( scandir( $root ) as $entry ) {
 	$source = $root . '/' . $entry;
 
 	if ( is_dir( $source ) ) {
-		copy_tree( $source, $scratch . '/' . $entry );
+		copy_tree( $source, $output . '/' . $entry );
 		continue;
 	}
 
-	copy( $source, $scratch . '/' . $entry );
+	copy( $source, $output . '/' . $entry );
 }
 
-// 2. Runtime dependencies only — nothing dev-related ends up in the artifact.
-run( array_merge( $composer, array( 'install', '--no-dev', '--prefer-dist', '--no-interaction', '--optimize-autoloader' ) ), $scratch );
+// 2. Runtime dependencies only: this removes the dev packages the copy inherited and writes the
+// autoloader from the copied composer.json. bin/build only needs composer.json for this one step.
+run( array_merge( $composer, array( 'install', '--no-dev', '--prefer-dist', '--no-interaction', '--optimize-autoloader' ) ), $output );
 
-// 3. Prefix the namespaces (PHP-Scoper, config in scoper.inc.php).
-run(
-	array(
-		PHP_BINARY,
-		$root . '/vendor/bin/php-scoper',
-		'add-prefix',
-		$scratch,
-		'--output-dir=' . $output,
-		'--config=' . $root . '/scoper.inc.php',
-		'--force',
-	)
-);
-
-// 4. PHP-Scoper collects its files with Symfony Finder, whose default is to skip dot-files — so a
-// dot-directory of the build (Vite's manifest used to live in assets/<dir>/.vite/) silently
-// disappeared from the archive and an installed copy came up with an empty screen. Whatever the
-// scoper left out is copied over here, and the last step refuses to ship an incomplete artifact.
-$dropped = array_values( array_diff( relative_files( $scratch, $scratch ), relative_files( $output, $output ) ) );
-
-foreach ( $dropped as $relative_path ) {
-	$target = $output . '/' . $relative_path;
-
-	if (!is_dir(dirname($target)) && !mkdir(dirname($target), 0o755, true) && !is_dir(dirname($target))) {
-		fwrite(STDERR, 'Cannot create ' . dirname($target) . "\n");
-		exit(1);
-	}
-
-	if (!copy($scratch . '/' . $relative_path, $target)) {
-		fwrite(STDERR, "Cannot copy {$relative_path} into the artifact\n");
-		exit(1);
-	}
-}
-
-if (array() !== $dropped) {
-	echo 'Left out by PHP-Scoper, copied over: ', implode(', ', $dropped), "\n";
-}
-
-// 5. The prefixed copy needs its own autoloader, built from the rewritten composer.json.
-run( array_merge( $composer, array( 'dump-autoload', '--working-dir=' . $output, '--classmap-authoritative' ) ) );
-
-// Composer metadata is only needed while generating that autoloader.
 foreach ( array( $output . '/composer.json', $output . '/composer.lock' ) as $metadata ) {
 	if ( is_file( $metadata ) ) {
 		unlink( $metadata );
 	}
 }
 
-// 6. The artifact carries every file of the scratch copy except that metadata. A silent drop is
-// exactly the bug nobody notices until the installed plugin is broken, so it fails the build here.
-$expected = array_values(array_diff(relative_files($scratch, $scratch), array('composer.json', 'composer.lock')));
-$missing  = array_values(array_diff($expected, relative_files($output, $output)));
+// 3. Nothing development-only may reach a user's site. The list is checked instead of trusted: a
+// wrong exclusion ships silently, and a plugin that carries its own test suite or build config is
+// a rejected submission. This is the check that a prefixing step would have to keep as well — a
+// tool between the copy and the archive can drop a file without failing.
+$leaked = array();
 
-if (array() !== $missing) {
-	fwrite(STDERR, 'The artifact is incomplete, missing: ' . implode(', ', $missing) . "\n");
-	exit(1);
+foreach ( array_merge( EXCLUDED_FROM_ARTIFACT, array( 'composer.json' ) ) as $entry ) {
+	if ( file_exists( $output . '/' . $entry ) ) {
+		$leaked[] = $entry;
+	}
 }
 
-remove_tree( $scratch );
+if ( array() !== $leaked ) {
+	fwrite( STDERR, 'The artifact contains development files: ' . implode( ', ', $leaked ) . "\n" );
+	exit( 1 );
+}
 
 $files = list_files( $output );
 

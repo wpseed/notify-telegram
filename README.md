@@ -19,8 +19,7 @@ incoming webhook. Scaffolded from the lab's `starter-plugin` template: namespace
 | `src/Rest/SettingsController.php` | The routes the screen reads and writes through: `/settings`, `/test`, `/log` |
 | `src/Delivery/TestSender.php` | The test button: one message through every configured channel |
 | `admin-ui/`, `package.json`, `vite.config.mjs` | React + antd sources and the Vite build of the screen |
-| `scoper.inc.php` | PHP-Scoper config: the prefix for the vendor namespaces |
-| `bin/build` | Archive builder (`composer build`): prefixed copy + zip into `dist/` |
+| `bin/build` | Archive builder (`composer build`): a copy without the development files + zip into `dist/` |
 | `.github/workflows/build-plugin.yml` | The same build in CI, triggered by a version tag |
 | `.github/workflows/php-floor.yml` | The PHP floor check: install and lint on 8.2, on every push |
 | `tests/unit/` | Fast unit tests (PHPUnit, WordPress is not loaded) |
@@ -31,7 +30,7 @@ incoming webhook. Scaffolded from the lab's `starter-plugin` template: namespace
 ```bash
 cd web/app/plugins/notify-telegram
 
-composer install          # development dependencies (phpunit, wp-phpunit, WPCS, php-scoper)
+composer install          # development dependencies (phpunit, wp-phpunit, WPCS)
 composer test             # every test
 composer test:unit        # unit only
 composer test:integration # integration only (boots WordPress)
@@ -220,63 +219,42 @@ These are two different mechanisms and both are needed:
    without a prefix fails `composer lint`.
 2. **Vendor packages** (Guzzle, Symfony and other shared libraries) — this is where real
    collisions happen: two plugins pull different versions of the same library and the one
-   whose autoloader registered first wins. The fix is prefixing the dependencies, and this
-   template ships a ready pipeline for it — see the next section.
+   whose autoloader registered first wins. The fix is prefixing the dependencies, but there is
+   nothing to prefix here: `composer.json` requires PHP and nothing else, so the plugin ships
+   no third-party code at all.
 
-## Vendor dependencies: PHP-Scoper
+## No prefixing step, because there is nothing to prefix
 
-`humbug/php-scoper` copies the code the plugin ships, rewrites the namespaces of the
-dependencies and produces the shippable copy. After that, the bundle's copy of, say,
-Guzzle lives as `NotifyTelegram\Dependencies\GuzzleHttp\Client`, so it cannot collide with
-the Guzzle that another active plugin registered first — not even when the versions differ.
+The build used to run PHP-Scoper over the copy and rename a `NotifyTelegram\Dependencies`
+namespace. With no runtime dependency inside, every step of that pipeline was a step that
+could drop a file from the archive without failing, while the collision it protected against
+could not happen. It was removed; the pipeline still lives in the lab's `starter-plugin`
+template for the day a library actually arrives.
 
-What this template already contains:
-
-* `humbug/php-scoper` ^0.18 as a **dev dependency** (plain `composer install` provides it);
-* `scoper.inc.php`: prefix `NotifyTelegram\Dependencies`, and `Wpseed\NotifyTelegram` in
-  `exclude-namespaces`, so the plugin's own code keeps its names;
-* `composer build` → `bin/build`;
-* `.gitignore`: `dist/`, `build-src/` and `build/` — the build output is never committed.
-
-Typical flow after adding a dependency:
-
-```bash
-composer require guzzlehttp/guzzle
-composer build                      # → dist/notify-telegram/ + dist/notify-telegram.zip
-composer test                       # still green: the suite runs against the source tree
-```
+If that day comes, bring over `humbug/php-scoper`, **not** `brianhenryie/strauss`: Strauss
+does not run on Windows at all (`FileSystem::getFsRoot()` matches forward slashes only, while
+`getcwd()` returns backslashes there) and this dev machine is Windows. Whatever the tool,
+keep `bin/build`'s leak check — it is what catches a build step that drops or adds a file
+instead of failing.
 
 ### What `composer build` does
 
-1. copies the plugin into `build-src/`, leaving out the development-only files;
-2. runs `composer install --no-dev` **there**, so the archive carries the runtime
-   dependencies only and the dev tree keeps its own `vendor/` intact;
-3. runs `php-scoper add-prefix` over that copy with `scoper.inc.php`, writing the result
-   to `dist/notify-telegram/`;
-4. regenerates `dist/notify-telegram/vendor/autoload.php` from the rewritten
-   `composer.json` (`composer dump-autoload --classmap-authoritative`) and then drops that
-   metadata file;
-5. removes the scratch copy and zips `dist/notify-telegram/` into
-   `dist/notify-telegram.zip`.
+1. copies the plugin into `dist/notify-telegram/`, leaving out the development-only files;
+2. runs `composer install --no-dev` **there**: the dev packages the copy inherited are
+   removed and `vendor/autoload.php` is written from the copied `composer.json`;
+3. drops that `composer.json`/`composer.lock` again — they were only needed for step 2;
+4. checks that no development-only entry (tests, build config, the screen's sources, `bin/`)
+   reached the artifact, and **fails** if one did;
+5. zips `dist/notify-telegram/` into `dist/notify-telegram.zip`.
 
-The source tree is never modified, so `composer test`, `composer lint` and the dev
-autoloader keep working with unprefixed names — you write `use GuzzleHttp\Client;`, and
-only the artifact contains the prefixed class.
+The source tree is never modified, so `composer test` and `composer lint` keep working while
+the archive is built.
 
 ### What ships, and what does not
 
 | In `dist/notify-telegram.zip` | Left out |
 | --- | --- |
-| `notify-telegram.php` (the plugin file), `src/`, `vendor/` with the prefixed runtime dependencies and their autoloader | `tests/`, `bin/`, `.github/`, `.gitignore`, `composer.json`, `composer.lock`, `phpcs.xml.dist`, `phpunit.xml.dist`, `README.md`, `scoper.inc.php` |
-
-### Configuring the prefix
-
-`scoper.inc.php` is deliberately short. Dependencies that themselves use WordPress or
-PHPUnit symbols need those excluded as well, e.g. `exclude-classes` => `['WP_List_Table']`,
-`exclude-functions` => `['apply_filters']`, `exclude-constants` => `['WP_PLUGIN_DIR']`.
-Add them for a dependency that actually needs them, not preemptively: every excluded
-symbol is a symbol that can still collide. After any change to the config, run
-`composer build` and re-check the artifact (see below).
+| `notify-telegram.php` (the plugin file), `src/`, `assets/admin/` with the built screen and its manifest, `vendor/autoload.php` with Composer's class map | `tests/`, `bin/`, `.github/`, `.gitignore`, `admin-ui/`, `node_modules/`, `package.json`, `package-lock.json`, `vite.config.mjs`, `composer.json`, `composer.lock`, `phpcs.xml.dist`, `phpunit.xml.dist`, `README.md` |
 
 ### The Composer autoloader suffix
 
@@ -292,56 +270,21 @@ its own `dist/` build) still share the name by design — do not run both at onc
 
 ### What was verified on this host
 
-The prefixing was proven end to end, not just "the tool exits with 0". A plugin with the
-runtime dependency `psr/log` was built and the artifact was then loaded through
-`dist/<slug>/vendor/autoload.php`:
+The archive was not only built but installed. `dist/notify-telegram/` was copied to
+`web/app/plugins/notify-telegram-built` on the lab site — with the source plugin deactivated
+first, because both copies share the Composer autoloader class name — activated, and the
+screen was fetched with an administrator's cookies. It came back with the mount element, the
+inline configuration and no "bundle is missing" notice, and the script URL printed on that
+page served the bundle byte-identical to the source build.
 
-```
-our class (not prefixed):        OK        # Wpseed\NotifyTelegram\ScopedDemo
-prefixed dependency:             OK        # NotifyTelegram\Dependencies\Psr\Log\NullLogger
-the unprefixed dependency:       absent    # Psr\Log\NullLogger does not exist
-class handed to the plugin code: NotifyTelegram\Dependencies\Psr\Log\NullLogger
-```
-
-The last line is the point: `src/ScopedDemo.php` was written as `use Psr\Log\NullLogger;`
-and PHP-Scoper rewrote that reference inside the artifact
-(`use NotifyTelegram\Dependencies\Psr\Log\NullLogger;`) — the plugin's own code works
-unchanged against the prefixed copy. The archive also contained no `tests/`, `bin/`,
-`.github/`, `phpunit.xml.dist` or top-level `composer.json`.
-
-### Why PHP-Scoper and not Strauss
-
-Strauss (`brianhenryie/strauss`) is the usual recommendation for WordPress plugins and it
-was tried first here. It does not run on Windows at all, and this lab's dev machine is
-Windows:
-
-```
-In UnableToCreateDirectory.php line 18:
-  Unable to create a directory at . mkdir(): Invalid path
-```
-
-`FileSystem::getFsRoot()` matches forward slashes only, while PHP's `getcwd()` returns
-backslashes on Windows: `getFsRoot('C:\projects\x')` returns `''` but
-`getFsRoot('C:/projects/x')` returns `'C:/'`. The official `.phar` fails identically, and
-normalising the separators only moves the failure on — Strauss then walks the filesystem
-from the drive root and exhausts the 512 MB memory limit in
-`SymlinkProtectFilesystemAdapter`. The maintainer does not use Windows (upstream issue #94
-belongs to the same family of bugs).
-
-Both candidates were run on this host, and only one of them works on it:
-
-| | Strauss 0.30.0 | PHP-Scoper 0.18.18 |
-| --- | --- | --- |
-| Runs on the Windows dev machine | no | **yes** (verified end to end) |
-| Runs in CI | yes | yes |
-| Output | `vendor-prefixed/` next to `vendor/`, call sites rewritten in place | a fully scoped copy in `dist/`, source tree untouched |
-| Scope | the packages listed in `require` | everything the plugin ships (own code kept via `exclude-namespaces`) |
-| Needs an extra download | no (composer package) | no (composer package) |
+The leak check was verified by breaking it: `composer install` recreates `composer.json` inside
+the artifact, and with that cleanup disabled the build stops with `The artifact contains
+development files: composer.json` instead of shipping it — and leaves no archive behind.
 
 ### Where the build runs: locally and in CI
 
-Locally — `composer build`, on Windows too. That is the main reason PHP-Scoper was chosen:
-the archive can be built and inspected on the dev machine, with no CI round trip.
+Locally — `composer build`, on Windows too: the archive is built and inspected on the dev
+machine, with no CI round trip.
 
 In CI — `.github/workflows/build-plugin.yml` runs the very same `composer build` on
 ubuntu-latest and attaches the zip to the GitHub release when a version tag (`v1.2.3`) is
@@ -364,10 +307,5 @@ archives.
   assertion has to target the page callback, not the menu array.
 * The WordPress test suite reads the config path from the **constant**
   `WP_TESTS_CONFIG_FILE_PATH`, not from an environment variable.
-* PHP-Scoper rewrites the symbols it can see in the code. Class names inside strings or
-  built at runtime (a hook callback passed as `'Wpseed\\NotifyTelegram\\Handler::run'`, a
-  generated `class_exists()` argument) are not touched — keep such names unprefixed or
-  build them from `::class`, which the rewriter handles.
-* The plugin's own tests run against the **source** tree, not against `dist/`. To check a
-  dependency was really prefixed, load the artifact's autoloader and assert on
-  `class_exists()` as shown above.
+* The plugin's own tests run against the **source** tree, not against `dist/`: the artifact
+  is checked by installing it (see above), never by reading it.

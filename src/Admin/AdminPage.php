@@ -88,8 +88,8 @@ final class AdminPage {
 	/**
 	 * Built bundle manifest, relative to the plugin directory.
 	 *
-	 * Not Vite's default `.vite/manifest.json`: a dot-directory is dropped by tools that walk the tree
-	 * with Symfony Finder (PHP-Scoper does), so it never reached the shipped archive.
+	 * Vite's default is `assets/<dir>/.vite/manifest.json`; the manifest is kept beside the bundle
+	 * instead, so the path is the same one in the archive, in `bin/build` and here.
 	 */
 	private const MANIFEST = 'assets/admin/manifest.json';
 

@@ -2,10 +2,9 @@
 /vendor
 composer.lock
 
-# PHP-Scoper build output and its scratch copy
+# Build output
 /dist
 /build-src
-/build
 
 # Tests
 /.phpunit.cache
