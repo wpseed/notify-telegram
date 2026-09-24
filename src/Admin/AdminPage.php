@@ -1,6 +1,6 @@
 <?php
 /**
- * The plugin's admin screen: a top-level menu with the Events and Settings pages.
+ * The plugin's admin screen: one menu entry, with both pages inside it.
  *
  * @package NotifyTelegram
  */
@@ -13,27 +13,36 @@ use Wpseed\NotifyTelegram\Plugin;
 use Wpseed\NotifyTelegram\Rest\SettingsController;
 
 /**
- * Registers the menu and boots the React application on both of its pages.
+ * Registers the menu and boots the React application on it.
  *
- * The screen itself is rendered in JavaScript: PHP prints the mount element on each page, hands the
- * application its configuration (REST root, nonce, version, the page it is on) and enqueues the built
- * bundle from assets/admin/. Without the bundle the page shows a developer notice instead of nothing.
+ * There is deliberately no submenu. WordPress prints the submenu list only when `$submenu` holds
+ * entries for the parent slug (`wp-admin/menu-header.php`), so a lone `add_menu_page()` leaves the menu
+ * with one plain link and nothing to unfold on hover. Events and Settings are therefore tabs inside the
+ * page, and a tab stays addressable: the application keeps the `tab` query argument in step with the
+ * open tab, so a reload and a shared link both come back to the same one.
  *
- * The first submenu reuses the parent slug, which is how WordPress is told to label the first entry of
- * the submenu instead of adding a second one: the menu reads "Events" and "Settings", and the top-level
- * entry itself opens Events.
+ * The screen itself is rendered in JavaScript: PHP prints the mount element, hands the application its
+ * configuration (REST root, nonce, version, the tab to open) and enqueues the built bundle from
+ * assets/admin/. Without the bundle the page shows a developer notice instead of nothing.
  */
 final class AdminPage {
 
 	/**
-	 * Top-level menu slug, which is also the Events page.
+	 * Top-level menu slug.
 	 */
 	public const MENU_SLUG = 'notify-telegram';
 
 	/**
-	 * Settings page slug.
+	 * Tabs of the screen, in the order they are rendered.
+	 *
+	 * @var array<int, string>
 	 */
-	public const SETTINGS_SLUG = 'notify-telegram-settings';
+	public const TABS = array( 'events', 'settings' );
+
+	/**
+	 * Query argument that opens a tab.
+	 */
+	public const TAB_ARG = 'tab';
 
 	/**
 	 * Script and style handle.
@@ -46,7 +55,7 @@ final class AdminPage {
 	public const MOUNT_ID = 'notify-telegram-admin-root';
 
 	/**
-	 * Capability required for the menu and the pages.
+	 * Capability required for the menu and the page.
 	 */
 	public const CAPABILITY = 'manage_options';
 
@@ -89,13 +98,13 @@ final class AdminPage {
 	}
 
 	/**
-	 * Adds the top-level menu and its two pages.
+	 * Adds the plugin's single menu entry.
 	 *
 	 * @return void
 	 */
 	public function add_menu(): void {
 		$top_level = add_menu_page(
-			__( 'Events', 'notify-telegram' ),
+			__( 'Notify Telegram', 'notify-telegram' ),
 			__( 'Notify Telegram', 'notify-telegram' ),
 			self::CAPABILITY,
 			self::MENU_SLUG,
@@ -104,37 +113,14 @@ final class AdminPage {
 			81
 		);
 
-		// The parent slug is reused for the first item on purpose. Core adds a link back to the parent
-		// only when the submenu is still empty *and* the slug differs, so without this line the first
-		// entry would be labelled "Notify Telegram" and point at Events; with it the menu reads exactly
-		// "Events" and "Settings".
-		$events = add_submenu_page(
-			self::MENU_SLUG,
-			__( 'Events', 'notify-telegram' ),
-			__( 'Events', 'notify-telegram' ),
-			self::CAPABILITY,
-			self::MENU_SLUG,
-			array( $this, 'render' )
-		);
-
-		$settings = add_submenu_page(
-			self::MENU_SLUG,
-			__( 'Settings', 'notify-telegram' ),
-			__( 'Settings', 'notify-telegram' ),
-			self::CAPABILITY,
-			self::SETTINGS_SLUG,
-			array( $this, 'render' )
-		);
-
-		// The Events entry reuses the parent slug, so core names its hook exactly like the top-level
-		// page; the duplicate is dropped here rather than enqueued twice.
-		$this->screens = array_values(
-			array_unique( array_filter( array( $top_level, $events, $settings ), 'is_string' ) )
-		);
+		// No add_submenu_page() call on purpose. Adding one — even one that reuses the parent slug —
+		// is exactly what gives the entry a submenu list in the sidebar, and the two pages belong
+		// inside the page as tabs, so the menu keeps a single plain link.
+		$this->screens = is_string( $top_level ) ? array( $top_level ) : array();
 	}
 
 	/**
-	 * Enqueues the built bundle — on the plugin's own pages only.
+	 * Enqueues the built bundle — on the plugin's own screen only.
 	 *
 	 * @param string $hook_suffix Current admin screen.
 	 * @return void
@@ -164,7 +150,7 @@ final class AdminPage {
 		// everything into strings.
 		wp_add_inline_script(
 			self::HANDLE,
-			'window.notifyTelegramAdmin = ' . wp_json_encode( $this->config( $hook_suffix ) ) . ';',
+			'window.notifyTelegramAdmin = ' . wp_json_encode( $this->config() ) . ';',
 			'before'
 		);
 	}
@@ -172,33 +158,30 @@ final class AdminPage {
 	/**
 	 * Configuration handed to the React application.
 	 *
-	 * @param string $hook_suffix Current admin screen.
 	 * @return array<string, mixed>
 	 */
-	public function config( string $hook_suffix ): array {
+	public function config(): array {
 		return array(
-			'apiRoot'      => esc_url_raw( rest_url( SettingsController::REST_NAMESPACE ) ),
-			'nonce'        => wp_create_nonce( 'wp_rest' ),
-			'version'      => Plugin::VERSION,
-			'page'         => $hook_suffix === $this->settings_screen() ? 'settings' : 'events',
-			// The application keeps the address bar in step with the open page, so a reload comes back
-			// to it and the WordPress menu highlights it.
-			'eventsSlug'   => self::MENU_SLUG,
-			'settingsSlug' => self::SETTINGS_SLUG,
+			'apiRoot' => esc_url_raw( rest_url( SettingsController::REST_NAMESPACE ) ),
+			'nonce'   => wp_create_nonce( 'wp_rest' ),
+			'version' => Plugin::VERSION,
+			'tab'     => $this->initial_tab(),
 		);
 	}
 
 	/**
-	 * Hook suffix of the Settings page.
+	 * Tab the screen opens on, taken from the request.
 	 *
-	 * Asked of core rather than taken from the screen list by position: the Events entry reuses the
-	 * parent slug, so core names its hook exactly like the top-level page and the list holds no simple
-	 * second entry.
+	 * Only the two known tabs pass: a stale link or a hand-typed value falls back to the first one
+	 * instead of rendering a screen with nothing selected.
 	 *
 	 * @return string
 	 */
-	private function settings_screen(): string {
-		return (string) get_plugin_page_hookname( self::SETTINGS_SLUG, self::MENU_SLUG );
+	public function initial_tab(): string {
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- a view switch, not an action.
+		$requested = isset( $_GET[ self::TAB_ARG ] ) ? sanitize_key( wp_unslash( (string) $_GET[ self::TAB_ARG ] ) ) : '';
+
+		return in_array( $requested, self::TABS, true ) ? $requested : self::TABS[0];
 	}
 
 	/**

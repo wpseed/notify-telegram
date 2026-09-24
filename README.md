@@ -15,7 +15,7 @@ incoming webhook. Scaffolded from the lab's `starter-plugin` template: namespace
 | `src/Channel/` | `Channel` interface, `Result`, `ChannelRegistry`, `TelegramChannel`, `EmailChannel`, `WebhookChannel` |
 | `src/Event/` | `Event`, `EventRegistry`, `EventSource`, `UserEvents` (registration, failed login), `CommentEvents` |
 | `src/Delivery/` | `Router` (what goes out), `Queue` (WP-Cron, retries), `Log` (last 20 attempts) |
-| `src/Admin/AdminPage.php` | The menu: Notify Telegram → Events and Settings, and the React boot on both |
+| `src/Admin/AdminPage.php` | The single menu entry and the React boot behind it: Events and Settings are tabs on that one screen |
 | `src/Rest/SettingsController.php` | The routes the screen reads and writes through: `/settings`, `/test`, `/log` |
 | `src/Delivery/TestSender.php` | The test button: one message through every configured channel |
 | `admin-ui/`, `package.json`, `vite.config.mjs` | React + antd sources and the Vite build of the screen |
@@ -63,22 +63,28 @@ and the validation rules for its message template.
 ## The screen
 
 ```
-Notify Telegram  →  admin.php?page=notify-telegram            Events
-                    admin.php?page=notify-telegram-settings   Settings
+Notify Telegram  →  admin.php?page=notify-telegram               Events    (default)
+                    admin.php?page=notify-telegram&tab=settings  Settings
 ```
 
-Two pages under one top-level menu. **Events** lists every registered event with its switch, its message
+One menu entry, no submenu: **Events** and **Settings** are tabs inside the page. WordPress prints the
+submenu list only when `$submenu` holds entries for the parent slug (`wp-admin/menu-header.php`), so the
+plugin registers a single `add_menu_page()` and no `add_submenu_page()` at all — not even one that
+reuses the parent slug, which is the usual trick for labelling the first entry and is exactly what
+unfolds the list on hover. The sidebar shows one plain link, and `toplevel_page_notify-telegram` is the
+only screen the bundle is enqueued on.
+
+**Events** lists every registered event with its switch, its message
 and the placeholders that event accepts; **Settings** holds the master switch, one card per channel with
 the fields the channel itself declares, the test button and the last twenty delivery attempts. The state
-lives in the root component, so switching pages never loses an edit and one Save button stores both pages
-— the plugin keeps all of it in a single option anyway.
+lives in the root component, so switching tabs never loses an edit and one Save button stores both — the
+plugin keeps all of it in a single option anyway.
 
-The menu reuses the parent slug for its first entry: core adds a link back to the parent only when the
-submenu is still empty *and* the slug differs, so passing `MENU_SLUG` as the slug of the first
-`add_submenu_page()` is what makes the menu read exactly "Events" and "Settings" instead of a self-link
-plus one page. Core then names that entry's hook exactly like the top-level page
-(`toplevel_page_notify-telegram`), so the Settings hook is asked for with `get_plugin_page_hookname()`
-rather than read out of the screen list by position.
+The open tab is addressable: `AdminPage::initial_tab()` puts the requested `tab` query argument (only
+`events` or `settings` pass; anything else falls back to the first tab) into the configuration the screen
+is booted with, and the application writes the chosen tab back into the address bar with
+`history.replaceState()`. A reload or a shared link therefore opens the same tab, without a WordPress
+page per tab.
 
 PHP prints the WordPress heading, the description and the mount element; the application fills the mount
 element and nothing else. The lab's `starter-plugin` keeps a working reference of the build setup —
@@ -322,8 +328,11 @@ archives.
 
 * `add_submenu_page()`/`add_menu_page()` return `false` when the current user lacks the
   capability — tests need `wp_set_current_user()` with an administrator.
-* Submenu items added with `$position === null` get **numeric** keys while the slug sits
-  in element `[2]`, so you have to search by value.
+* A top-level entry with **no** submenu is rendered as a plain link: core adds
+  `wp-has-submenu` and the `<ul class="wp-submenu">` list only when `$submenu` has entries
+  for the parent slug. `add_menu_page()` itself still puts the item into `$menu` for every
+  user (core filters `$menu` by capability later, in `wp-admin/menu.php`), so a capability
+  assertion has to target the page callback, not the menu array.
 * The WordPress test suite reads the config path from the **constant**
   `WP_TESTS_CONFIG_FILE_PATH`, not from an environment variable.
 * PHP-Scoper rewrites the symbols it can see in the code. Class names inside strings or

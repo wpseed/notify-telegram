@@ -9,7 +9,7 @@ use Wpseed\NotifyTelegram\Plugin;
 use WP_UnitTestCase;
 
 /**
- * The plugin menu: one top-level entry with the Events and Settings pages, and the bundle on both.
+ * The plugin menu: one top-level entry, no submenu, and the tabs inside the page it opens.
  */
 final class AdminPageTest extends WP_UnitTestCase
 {
@@ -20,6 +20,9 @@ final class AdminPageTest extends WP_UnitTestCase
         wp_set_current_user(self::factory()->user->create(['role' => 'administrator']));
         wp_dequeue_script(AdminPage::HANDLE);
 
+        // A tab requested by one test must not leak into the next one.
+        unset($_GET[AdminPage::TAB_ARG]);
+
         $GLOBALS['menu'] = [];
         $GLOBALS['submenu'] = [];
 
@@ -28,46 +31,43 @@ final class AdminPageTest extends WP_UnitTestCase
 
     public function test_the_top_level_menu_is_registered(): void
     {
-        $slugs = array_map(
-            static fn (array $item): string => (string) ($item[2] ?? ''),
-            is_array($GLOBALS['menu']) ? $GLOBALS['menu'] : []
-        );
-
-        self::assertContains(AdminPage::MENU_SLUG, $slugs);
+        self::assertContains(AdminPage::MENU_SLUG, self::menu_slugs());
     }
 
-    public function test_the_menu_has_exactly_the_events_and_settings_pages(): void
+    public function test_the_menu_entry_is_labelled_notify_telegram(): void
     {
-        self::assertSame(
-            [AdminPage::MENU_SLUG, AdminPage::SETTINGS_SLUG],
-            self::submenu_slugs()
-        );
+        self::assertSame('Notify Telegram', self::menu_label(AdminPage::MENU_SLUG));
     }
 
-    public function test_the_two_pages_are_labelled_events_and_settings(): void
+    public function test_the_menu_has_no_submenu_items(): void
     {
-        $labels = array_map(
-            static fn (array $item): string => (string) ($item[0] ?? ''),
-            is_array($GLOBALS['submenu'][AdminPage::MENU_SLUG] ?? null)
-                ? $GLOBALS['submenu'][AdminPage::MENU_SLUG]
-                : []
-        );
-
-        self::assertSame(['Events', 'Settings'], $labels);
+        // The point of the single entry: WordPress prints the submenu list only when the parent slug
+        // holds entries (wp-admin/menu-header.php), so an empty one is what keeps the sidebar free of
+        // an unfolded list.
+        self::assertArrayNotHasKey(AdminPage::MENU_SLUG, $GLOBALS['submenu']);
     }
 
-    public function test_a_subscriber_gets_no_menu(): void
+    public function test_the_screen_is_reachable_as_a_page(): void
     {
+        self::assertArrayHasKey(self::hook_suffix(), $GLOBALS['_registered_pages']);
+    }
+
+    public function test_the_page_is_silent_for_a_user_without_the_capability(): void
+    {
+        // Core drops the entry from the sidebar in wp-admin/menu.php, which filters $menu by each
+        // item's capability; what this class owes on top of that is a screen that prints nothing.
         wp_set_current_user(self::factory()->user->create(['role' => 'subscriber']));
-        $GLOBALS['menu'] = [];
-        $GLOBALS['submenu'] = [];
 
-        do_action('admin_menu');
+        $page = new AdminPage(Plugin::instance()->file());
 
-        self::assertSame([], self::submenu_slugs());
+        ob_start();
+        $page->render();
+        $html = (string) ob_get_clean();
+
+        self::assertSame('', $html);
     }
 
-    public function test_both_pages_print_the_mount_element(): void
+    public function test_the_page_prints_the_mount_element(): void
     {
         $page = new AdminPage(Plugin::instance()->file());
 
@@ -79,27 +79,39 @@ final class AdminPageTest extends WP_UnitTestCase
         self::assertStringContainsString('notify-telegram-admin', $html);
     }
 
-    public function test_the_configuration_tells_the_application_which_page_it_is_on(): void
+    public function test_the_screen_opens_the_first_tab_by_default(): void
     {
-        $page = new AdminPage(Plugin::instance()->file());
-        $page->add_menu();
-
-        $events = $page->config(self::hook_suffix(AdminPage::MENU_SLUG, ''));
-        $settings = $page->config(self::hook_suffix(AdminPage::SETTINGS_SLUG, AdminPage::MENU_SLUG));
-
-        self::assertSame('events', $events['page']);
-        self::assertSame('settings', $settings['page']);
-        self::assertSame(AdminPage::MENU_SLUG, $events['eventsSlug']);
-        self::assertSame(AdminPage::SETTINGS_SLUG, $settings['settingsSlug']);
-        self::assertStringContainsString('notify-telegram/v1', (string) $events['apiRoot']);
-        self::assertNotSame('', (string) $events['nonce']);
+        self::assertSame('events', self::config()['tab']);
     }
 
-    public function test_the_bundle_is_enqueued_on_the_plugin_pages(): void
+    public function test_the_tab_comes_from_the_request(): void
+    {
+        $_GET[AdminPage::TAB_ARG] = 'settings';
+
+        self::assertSame('settings', self::config()['tab']);
+    }
+
+    public function test_an_unknown_tab_falls_back_to_the_first_one(): void
+    {
+        $_GET[AdminPage::TAB_ARG] = 'not-a-tab';
+
+        self::assertSame('events', self::config()['tab']);
+    }
+
+    public function test_the_configuration_carries_the_rest_root_and_the_nonce(): void
+    {
+        $config = self::config();
+
+        self::assertStringContainsString('notify-telegram/v1', (string) $config['apiRoot']);
+        self::assertNotSame('', (string) $config['nonce']);
+        self::assertSame(Plugin::VERSION, $config['version']);
+    }
+
+    public function test_the_bundle_is_enqueued_on_the_plugin_screen(): void
     {
         self::skipWithoutBundle();
 
-        do_action('admin_enqueue_scripts', self::hook_suffix(AdminPage::MENU_SLUG, ''));
+        do_action('admin_enqueue_scripts', self::hook_suffix());
 
         self::assertTrue(wp_script_is(AdminPage::HANDLE, 'enqueued'));
     }
@@ -123,11 +135,21 @@ final class AdminPageTest extends WP_UnitTestCase
     }
 
     /**
-     * Hook suffix WordPress builds for a page.
+     * The configuration the screen is booted with.
+     *
+     * @return array<string, mixed>
      */
-    private static function hook_suffix(string $slug, string $parent): string
+    private static function config(): array
     {
-        return (string) get_plugin_page_hookname($slug, $parent);
+        return (new AdminPage(Plugin::instance()->file()))->config();
+    }
+
+    /**
+     * Hook suffix WordPress builds for the plugin's top-level page.
+     */
+    private static function hook_suffix(): string
+    {
+        return (string) get_plugin_page_hookname(AdminPage::MENU_SLUG, '');
     }
 
     /**
@@ -141,15 +163,29 @@ final class AdminPageTest extends WP_UnitTestCase
     }
 
     /**
+     * Slugs of the registered top-level menu entries.
+     *
      * @return list<string>
      */
-    private static function submenu_slugs(): array
+    private static function menu_slugs(): array
     {
-        $items = $GLOBALS['submenu'][AdminPage::MENU_SLUG] ?? [];
-
-        return array_values(array_filter(array_map(
+        return array_values(array_map(
             static fn (array $item): string => (string) ($item[2] ?? ''),
-            is_array($items) ? $items : []
-        )));
+            is_array($GLOBALS['menu']) ? $GLOBALS['menu'] : []
+        ));
+    }
+
+    /**
+     * Label of one top-level menu entry.
+     */
+    private static function menu_label(string $slug): string
+    {
+        foreach (is_array($GLOBALS['menu']) ? $GLOBALS['menu'] : [] as $item) {
+            if (($item[2] ?? '') === $slug) {
+                return (string) ($item[0] ?? '');
+            }
+        }
+
+        return '';
     }
 }

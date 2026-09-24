@@ -1,7 +1,7 @@
 /**
- * The plugin's screen: one state, two pages.
+ * The plugin's screen: one state, two tabs.
  *
- * The state is loaded and kept here rather than inside each page, so switching between Events and
+ * The state is loaded and kept here rather than inside each tab, so switching between Events and
  * Settings never loses an edit and one Save button stores everything — the plugin keeps all of it in a
  * single option anyway.
  */
@@ -57,7 +57,7 @@ export default function AdminApp( { config } ) {
 	const [ loading, setLoading ] = useState( true );
 	const [ saving, setSaving ] = useState( false );
 	const [ error, setError ] = useState( null );
-	const [ tab, setTab ] = useState( config.page === 'settings' ? 'settings' : 'events' );
+	const [ tab, setTab ] = useState( config.tab === 'settings' ? 'settings' : 'events' );
 
 	const load = useCallback( async () => {
 		setLoading( true );
@@ -84,8 +84,8 @@ export default function AdminApp( { config } ) {
 	);
 
 	/**
-	 * Switches pages and keeps the address bar in step, so a reload opens the same page and the
-	 * WordPress menu highlights it.
+	 * Switches tabs and keeps the address bar in step, so a reload — or a shared link — opens the same
+	 * tab. Nothing else has to follow: both tabs are the same WordPress screen.
 	 *
 	 * @param {string} key Tab key.
 	 */
@@ -93,7 +93,7 @@ export default function AdminApp( { config } ) {
 		setTab( key );
 
 		const url = new URL( window.location.href );
-		url.searchParams.set( 'page', key === 'settings' ? config.settingsSlug : config.eventsSlug );
+		url.searchParams.set( 'tab', key );
 		window.history.replaceState( {}, '', url );
 	};
 
