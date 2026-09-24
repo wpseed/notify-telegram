@@ -17,7 +17,9 @@ use Wpseed\NotifyTelegram\Message;
  *
  * Sending inside the request that triggered the event would put a 15 second HTTP timeout in the
  * middle of a registration, a comment or a checkout — so delivery is a scheduled event, and a
- * failed one is retried with a growing pause before it is written to the log as final.
+ * failed one is retried with a growing pause before it is written to the log as final. A failure
+ * the channel calls permanent is not retried at all, and one that comes with a pause (Telegram
+ * answers a rate limit with the number of seconds it wants) is retried after exactly that.
  */
 final class Queue {
 
@@ -33,6 +35,8 @@ final class Queue {
 
 	/**
 	 * Base pause between attempts, in seconds; multiplied by the attempt number.
+	 *
+	 * Used when the channel reported no pause of its own (see Result::retry_after()).
 	 */
 	public const RETRY_DELAY = 60;
 
@@ -108,14 +112,31 @@ final class Queue {
 			return;
 		}
 
+		if ( $result->is_permanent() ) {
+			$this->log->add(
+				$message->event_id(),
+				$channel_id,
+				false,
+				sprintf(
+					/* translators: %s: failure reason. */
+					__( 'Not retried: %s', 'notify-telegram' ),
+					$result->error()
+				)
+			);
+
+			return;
+		}
+
 		if ( $attempt < self::MAX_ATTEMPTS ) {
+			$delay = $result->retry_after() > 0 ? $result->retry_after() : self::RETRY_DELAY * $attempt;
+
 			$this->schedule(
 				array(
 					'message' => $message->to_array(),
 					'channel' => $channel_id,
 					'attempt' => $attempt + 1,
 				),
-				self::RETRY_DELAY * $attempt
+				$delay
 			);
 
 			return;

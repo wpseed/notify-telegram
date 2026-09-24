@@ -25,6 +25,8 @@ final class RecordingChannel implements Channel
         private readonly string $channel_id = 'recorder',
         private readonly bool $configured = true,
         private readonly bool $fails = false,
+        private readonly bool $permanent = false,
+        private readonly int $retry_after = 0,
     ) {
     }
 
@@ -55,7 +57,7 @@ final class RecordingChannel implements Channel
     {
         $this->sent[] = $message;
 
-        return $this->fails ? Result::fail('recorder failed') : Result::ok();
+        return $this->fails ? Result::fail('recorder failed', $this->retry_after, $this->permanent) : Result::ok();
     }
 
     public function last_text(): string

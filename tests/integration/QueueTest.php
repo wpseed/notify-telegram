@@ -98,6 +98,29 @@ final class QueueTest extends WP_UnitTestCase
         self::assertStringContainsString('recorder failed', $log->entries()[0]['message']);
     }
 
+    public function test_a_failure_that_cannot_be_fixed_is_not_retried(): void
+    {
+        $log = new Log();
+        $queue = new Queue(new ChannelRegistry([new RecordingChannel('blocked', true, true, true)]), $log);
+
+        $queue->deliver(self::payload('blocked'));
+
+        self::assertSame(0, self::scheduled_count(), 'a hopeless delivery must not be repeated');
+        self::assertFalse($log->entries()[0]['ok']);
+        self::assertStringContainsString('Not retried', $log->entries()[0]['message']);
+        self::assertStringContainsString('recorder failed', $log->entries()[0]['message']);
+    }
+
+    public function test_a_delivery_waits_as_long_as_the_channel_asked(): void
+    {
+        $queue = new Queue(new ChannelRegistry([new RecordingChannel('limited', true, true, false, 120)]), new Log());
+
+        $queue->deliver(self::payload('limited'));
+
+        self::assertSame(1, self::scheduled_count());
+        self::assertSame(120, self::scheduled_delay());
+    }
+
     public function test_a_message_for_an_unknown_channel_is_logged(): void
     {
         $log = new Log();
@@ -163,5 +186,19 @@ final class QueueTest extends WP_UnitTestCase
         }
 
         return $count;
+    }
+
+    /**
+     * Seconds from now until the queued delivery runs.
+     */
+    private static function scheduled_delay(): int
+    {
+        foreach ((array) _get_cron_array() as $timestamp => $hooks) {
+            if (isset($hooks[Queue::HOOK])) {
+                return (int) $timestamp - time();
+            }
+        }
+
+        return -1;
     }
 }

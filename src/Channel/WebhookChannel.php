@@ -90,6 +90,10 @@ final class WebhookChannel implements Channel {
 	/**
 	 * Sends the message to every configured URL.
 	 *
+	 * A failing endpoint does not stop the others: they are independent, and a Slack hook that was
+	 * deleted must not silence the one that still works. The failures are collected and reported
+	 * together.
+	 *
 	 * @param Message $message Message.
 	 * @return Result
 	 */
@@ -103,6 +107,8 @@ final class WebhookChannel implements Channel {
 			$headers[ self::SIGNATURE_HEADER ] = 'sha256=' . hash_hmac( 'sha256', $body, $secret );
 		}
 
+		$failures = array();
+
 		foreach ( $this->urls() as $url ) {
 			$response = wp_remote_post(
 				$url,
@@ -115,12 +121,18 @@ final class WebhookChannel implements Channel {
 
 			$result = self::read_response( $response );
 
-			if ( ! $result->is_ok() ) {
-				return Result::fail( $url . ': ' . $result->error() );
+			if ( $result->is_ok() ) {
+				continue;
 			}
+
+			$failures[] = Result::fail(
+				$url . ': ' . $result->error(),
+				$result->retry_after(),
+				$result->is_permanent()
+			);
 		}
 
-		return Result::ok();
+		return Result::combine( $failures );
 	}
 
 	/**
@@ -145,6 +157,10 @@ final class WebhookChannel implements Channel {
 	/**
 	 * Turns the answer of the endpoint into a result.
 	 *
+	 * A 4xx answer is final — a URL that moved, a hook that was revoked, a payload the endpoint
+	 * refuses stays refused — while a 5xx answer and a transport error are worth another attempt.
+	 * A 429 can tell the queue when to come back through the `Retry-After` header.
+	 *
 	 * @param mixed $response Answer of wp_remote_post().
 	 * @return Result
 	 */
@@ -155,24 +171,26 @@ final class WebhookChannel implements Channel {
 
 		$status = (int) wp_remote_retrieve_response_code( $response );
 
-		if ( $status < 200 || $status > 299 ) {
-			$body = trim( (string) wp_remote_retrieve_body( $response ) );
-
-			if ( '' !== $body ) {
-				$body = ': ' . mb_substr( $body, 0, 200 );
-			}
-
-			return Result::fail(
-				sprintf(
-					/* translators: 1: HTTP status code, 2: first characters of the response body. */
-					__( 'HTTP %1$d%2$s', 'notify-telegram' ),
-					$status,
-					$body
-				)
-			);
+		if ( $status >= 200 && $status <= 299 ) {
+			return Result::ok();
 		}
 
-		return Result::ok();
+		$body = trim( (string) wp_remote_retrieve_body( $response ) );
+
+		if ( '' !== $body ) {
+			$body = ': ' . mb_substr( $body, 0, 200 );
+		}
+
+		return Result::fail(
+			sprintf(
+				/* translators: 1: HTTP status code, 2: first characters of the response body. */
+				__( 'HTTP %1$d%2$s', 'notify-telegram' ),
+				$status,
+				$body
+			),
+			max( 0, (int) wp_remote_retrieve_header( $response, 'retry-after' ) ),
+			$status >= 400 && $status <= 499
+		);
 	}
 
 	/**

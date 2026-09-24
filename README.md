@@ -135,10 +135,21 @@ Things that are easy to get wrong:
 - **Delivery is deferred on purpose.** A 15 second HTTP timeout in the middle of a registration, a
   comment or a checkout is worse than a late notification. The queue retries three times with a growing
   pause and only then writes the failure to the log; the `notify_telegram_send_async` filter (`false`)
-  makes the tests deliver inside the request.
+  makes the tests deliver inside the request. A failure a channel reports as permanent (`Result::fail()`
+  with `$permanent`) is not retried at all — a blocked bot or an endpoint that moved costs one log entry,
+  not three — and a failure that comes with a pause (Telegram answers a rate limit with
+  `parameters.retry_after`) is retried after exactly that pause.
 - **Telegram gets plain text.** A parse mode would turn every value the site interpolates (a customer
   name, a comment excerpt) into a parsing hazard, and Telegram answers a broken entity with a 400
   instead of the message. The webhook channel is the JSON one, with an optional HMAC-SHA256 signature.
+- **A message longer than 4096 units is sent as several messages, never cut.** The end of a notification
+  (the last order line, the tail of a comment) is the part someone reads, so `TelegramChannel::split()`
+  breaks at the last newline, then at the last space, and only cuts mid-word when there is no break at
+  all. Length is counted the way the API counts it — in UTF-16 code units, so an emoji costs two and a
+  cut never lands inside a surrogate pair (`TelegramChannel::length()`).
+- **Every chat and every webhook URL is independent.** One target that refuses a message does not stop
+  the others: both channels collect the failures they met and report them together (`Result::combine()`),
+  so a deleted Slack hook cannot silence a working one.
 - **A channel with an empty field is skipped, not reported.** A fresh install is not an error: the
   settings screen shows such a channel as *not configured yet*, and the router logs `Skipped: no channel
   is enabled and configured` when a real event finds nothing to send through.

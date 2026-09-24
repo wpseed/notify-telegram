@@ -71,6 +71,79 @@ final class ChannelsTest extends WP_UnitTestCase
         self::assertStringContainsString('cURL error 6', $result->error());
     }
 
+    public function test_telegram_keeps_going_when_one_chat_refuses(): void
+    {
+        $this->stub_http_sequence([
+            [
+                'body' => '{"ok":false,"description":"Forbidden: bot was blocked by the user"}',
+                'response' => ['code' => 403, 'message' => 'Forbidden'],
+            ],
+            ['body' => '{"ok":true,"result":{"message_id":2}}'],
+        ]);
+
+        $result = self::telegram("-1001\n-1002")->send(Message::plain('demo', 'Hello'));
+
+        self::assertFalse($result->is_ok());
+        self::assertCount(2, $this->requests, 'the second chat must still get the message');
+        self::assertStringContainsString('-1001', $result->error());
+        self::assertStringContainsString('blocked', $result->error());
+        self::assertTrue($result->is_permanent(), 'a blocked bot is not worth three attempts');
+    }
+
+    public function test_telegram_passes_on_the_pause_of_a_rate_limit(): void
+    {
+        $this->stub_http([
+            'body' => '{"ok":false,"description":"Too Many Requests: retry after 25","parameters":{"retry_after":25}}',
+            'response' => ['code' => 429, 'message' => 'Too Many Requests'],
+        ]);
+
+        $result = self::telegram('-1001')->send(Message::plain('demo', 'Hello'));
+
+        self::assertFalse($result->is_ok());
+        self::assertSame(25, $result->retry_after());
+        self::assertFalse($result->is_permanent(), 'a rate limit is temporary');
+    }
+
+    public function test_a_server_error_is_retried_without_a_pause_of_its_own(): void
+    {
+        $this->stub_http(['body' => 'bad gateway', 'response' => ['code' => 502, 'message' => 'Bad Gateway']]);
+
+        $result = self::telegram('-1001')->send(Message::plain('demo', 'Hello'));
+
+        self::assertFalse($result->is_ok());
+        self::assertSame(0, $result->retry_after());
+        self::assertFalse($result->is_permanent());
+    }
+
+    public function test_telegram_sends_a_long_message_as_several_messages(): void
+    {
+        $this->stub_http(['body' => '{"ok":true,"result":{"message_id":1}}']);
+
+        $text = rtrim(str_repeat("an interesting line of the notification\n", 200));
+
+        $result = self::telegram('-1001')->send(Message::plain('demo', $text));
+
+        self::assertTrue($result->is_ok());
+        self::assertGreaterThan(1, count($this->requests));
+
+        $sent = '';
+
+        foreach ($this->requests as $request) {
+            $payload = json_decode((string) $request['args']['body'], true);
+
+            self::assertLessThanOrEqual(TelegramChannel::MAX_LENGTH, TelegramChannel::length($payload['text']));
+            self::assertStringEndsWith('notification', $payload['text'], 'the parts break on whole lines');
+
+            $sent .= $payload['text'];
+        }
+
+        self::assertSame(
+            (string) preg_replace('/\s+/', '', $text),
+            (string) preg_replace('/\s+/', '', $sent),
+            'the message must arrive whole'
+        );
+    }
+
     public function test_email_send_uses_wp_mail_with_the_valid_addresses_only(): void
     {
         $captured = null;
@@ -144,6 +217,26 @@ final class ChannelsTest extends WP_UnitTestCase
         self::assertStringContainsString('go away', $result->error());
     }
 
+    public function test_webhook_keeps_going_after_a_failing_endpoint(): void
+    {
+        $this->stub_http_sequence([
+            ['body' => 'gone', 'response' => ['code' => 404, 'message' => 'Not Found']],
+            ['body' => 'ok'],
+        ]);
+
+        update_option(Settings::OPTION, [
+            'channels' => ['webhook' => ['urls' => "https://example.com/one\nhttps://example.com/two"]],
+        ]);
+
+        $result = (new WebhookChannel(new Settings()))->send(Message::plain('demo', 'Hello'));
+
+        self::assertFalse($result->is_ok());
+        self::assertCount(2, $this->requests, 'the second endpoint must still get the payload');
+        self::assertStringContainsString('https://example.com/one', $result->error());
+        self::assertStringContainsString('HTTP 404', $result->error());
+        self::assertTrue($result->is_permanent(), 'an endpoint that is gone stays gone');
+    }
+
     public function test_webhook_ignores_a_value_that_is_not_a_url(): void
     {
         update_option(Settings::OPTION, [
@@ -182,16 +275,39 @@ final class ChannelsTest extends WP_UnitTestCase
         add_filter('pre_http_request', function ($preempt, $args, $url) use ($response) {
             $this->requests[] = ['url' => (string) $url, 'args' => (array) $args];
 
-            return array_merge(
-                [
-                    'headers' => [],
-                    'body' => '',
-                    'cookies' => [],
-                    'filename' => null,
-                    'response' => ['code' => 200, 'message' => 'OK'],
-                ],
-                $response
-            );
+            return array_merge(self::default_response(), $response);
         }, 10, 3);
+    }
+
+    /**
+     * Answers requests one by one, keeping the last response for the requests that follow.
+     *
+     * @param list<array<string, mixed>> $responses Responses in the order they are expected.
+     */
+    private function stub_http_sequence(array $responses): void
+    {
+        add_filter('pre_http_request', function ($preempt, $args, $url) use ($responses) {
+            $this->requests[] = ['url' => (string) $url, 'args' => (array) $args];
+
+            $index = min(count($this->requests) - 1, count($responses) - 1);
+
+            return array_merge(self::default_response(), $responses[$index]);
+        }, 10, 3);
+    }
+
+    /**
+     * A successful, empty response, as WordPress' HTTP layer builds it.
+     *
+     * @return array<string, mixed>
+     */
+    private static function default_response(): array
+    {
+        return [
+            'headers' => [],
+            'body' => '',
+            'cookies' => [],
+            'filename' => null,
+            'response' => ['code' => 200, 'message' => 'OK'],
+        ];
     }
 }
