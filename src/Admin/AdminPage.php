@@ -45,6 +45,24 @@ final class AdminPage {
 	public const TAB_ARG = 'tab';
 
 	/**
+	 * Position of the entry in the admin menu.
+	 *
+	 * WordPress puts its own sections at 2 (Dashboard), 4 (a separator), 5 (Posts), 10 (Media),
+	 * 20 (Pages), 25 (Comments), 59 (a separator), 60 (Appearance), 65 (Plugins), 70 (Users),
+	 * 75 (Tools), 80 (Settings) and 99 (a separator), and a plugin that passes no position at all
+	 * (null) is appended to the last group. 3 puts this entry directly under Dashboard, above
+	 * everything else; raise the number to move it down — 59.9 is just above Appearance, 75.9 just
+	 * under Tools. A number another plugin already took costs nothing: core offsets the later one by
+	 * a fraction, so both stay reachable.
+	 */
+	public const MENU_POSITION = 3;
+
+	/**
+	 * Menu icon file, relative to the plugin directory.
+	 */
+	private const ICON = 'assets/icon.svg';
+
+	/**
 	 * Script and style handle.
 	 */
 	public const HANDLE = 'notify-telegram-admin';
@@ -109,8 +127,8 @@ final class AdminPage {
 			self::CAPABILITY,
 			self::MENU_SLUG,
 			array( $this, 'render' ),
-			'dashicons-format-chat',
-			81
+			$this->icon(),
+			self::MENU_POSITION
 		);
 
 		// No add_submenu_page() call on purpose. Adding one — even one that reuses the parent slug —
@@ -182,6 +200,37 @@ final class AdminPage {
 		$requested = isset( $_GET[ self::TAB_ARG ] ) ? sanitize_key( wp_unslash( (string) $_GET[ self::TAB_ARG ] ) ) : '';
 
 		return in_array( $requested, self::TABS, true ) ? $requested : self::TABS[0];
+	}
+
+	/**
+	 * The menu icon, as a base64 data URI.
+	 *
+	 * Core treats `data:image/svg+xml;base64,…` as a special case (`wp-admin/menu-header.php`): it sets
+	 * the `svg` class on the menu image and puts the value into a `background-image`. That is the only
+	 * icon form that carries a colour of its own — a dashicon is recoloured by core (`div.wp-menu-image
+	 * :before`) and again by each colour scheme, and an SVG passed as a URL renders as a plain `<img>`
+	 * at 60% opacity. So the palette lives in `assets/icon.svg` and the entry keeps it in every scheme
+	 * and in both the normal and the highlighted state.
+	 *
+	 * @return string
+	 */
+	private function icon(): string {
+		$path = plugin_dir_path( $this->file ) . self::ICON;
+
+		if ( ! is_readable( $path ) ) {
+			// A stripped-down install still gets an icon rather than an empty 36 pixel column.
+			return 'dashicons-format-chat';
+		}
+
+		// phpcs:ignore WordPress.WP.AlternativeFunctions -- a local asset of this plugin.
+		$svg = (string) file_get_contents( $path );
+
+		if ( '' === $svg ) {
+			return 'dashicons-format-chat';
+		}
+
+		// phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.obfuscation_base64_encode -- core accepts a menu icon only as `data:image/svg+xml;base64,…` (wp-admin/menu-header.php): the encoding is the interface, not obfuscation.
+		return 'data:image/svg+xml;base64,' . base64_encode( $svg );
 	}
 
 	/**

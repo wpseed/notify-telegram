@@ -86,6 +86,23 @@ is booted with, and the application writes the chosen tab back into the address 
 `history.replaceState()`. A reload or a shared link therefore opens the same tab, without a WordPress
 page per tab.
 
+### The menu entry
+
+One entry, and `AdminPage::MENU_POSITION` is the only knob for where it sits: 3 puts it directly under
+Dashboard, while core's own sections are at 4 (a separator), 10 (Media), 20 (Pages), 60 (Appearance),
+65 (Plugins), 75 (Tools) and 80 (Settings) — a plugin that passes no position at all lands after them.
+A number another plugin already took costs nothing: core offsets the later registration by a fraction,
+so both entries stay reachable.
+
+The icon is the plugin's own rather than a dashicon. `assets/icon.svg` is a Telegram-blue tile with a
+white bell; `AdminPage::icon()` reads it and hands WordPress a `data:image/svg+xml;base64,…` URI. That
+form is the one core treats specially — it sets the `svg` class on the menu image and uses the value as
+a `background-image` (`wp-admin/menu-header.php`) — and it is the only form that keeps a colour of its
+own: a dashicon is recoloured by core (`div.wp-menu-image:before`) and again by every colour scheme, and
+an SVG passed as a URL renders as a plain `<img>` at 60% opacity. Change the two `fill` values in
+`assets/icon.svg` to change the palette; nothing else has to be touched, the file is read per admin
+request, and a missing file falls back to a dashicon instead of an empty menu column.
+
 PHP prints the WordPress heading, the description and the mount element; the application fills the mount
 element and nothing else. The lab's `starter-plugin` keeps a working reference of the build setup —
 including the part that is easy to get wrong, that the bundle must be an **IIFE**, because

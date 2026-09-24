@@ -39,6 +39,31 @@ final class AdminPageTest extends WP_UnitTestCase
         self::assertSame('Notify Telegram', self::menu_label(AdminPage::MENU_SLUG));
     }
 
+    public function test_the_menu_icon_is_a_base64_svg_carrying_its_own_palette(): void
+    {
+        $icon = self::menu_icon(AdminPage::MENU_SLUG);
+        $prefix = 'data:image/svg+xml;base64,';
+
+        // Core renders exactly this form as a `.wp-menu-image.svg` background image and never recolours
+        // it, which is what keeps the icon's own colours in every admin colour scheme.
+        self::assertSame($prefix, substr($icon, 0, strlen($prefix)));
+
+        $svg = (string) base64_decode(substr($icon, strlen($prefix)), true);
+
+        self::assertStringContainsString('<svg', $svg);
+
+        preg_match_all('/fill="([^"]+)"/', $svg, $matches);
+
+        // Three shapes, two colours of our own: core keeps whatever the SVG declares, which is the
+        // whole point of shipping an icon as a data URI instead of a dashicon.
+        self::assertSame(['#229ED9', '#ffffff', '#ffffff'], $matches[1]);
+    }
+
+    public function test_the_entry_sits_directly_under_the_dashboard(): void
+    {
+        self::assertSame(AdminPage::MENU_POSITION, self::menu_position(AdminPage::MENU_SLUG));
+    }
+
     public function test_the_menu_has_no_submenu_items(): void
     {
         // The point of the single entry: WordPress prints the submenu list only when the parent slug
@@ -187,5 +212,33 @@ final class AdminPageTest extends WP_UnitTestCase
         }
 
         return '';
+    }
+
+    /**
+     * Icon of one top-level menu entry: a dashicon class or a data URI.
+     */
+    private static function menu_icon(string $slug): string
+    {
+        foreach (is_array($GLOBALS['menu']) ? $GLOBALS['menu'] : [] as $item) {
+            if (($item[2] ?? '') === $slug) {
+                return (string) ($item[6] ?? '');
+            }
+        }
+
+        return '';
+    }
+
+    /**
+     * Key the entry was registered under, which is the position in the menu.
+     */
+    private static function menu_position(string $slug): int|float|null
+    {
+        foreach (is_array($GLOBALS['menu']) ? $GLOBALS['menu'] : [] as $key => $item) {
+            if (($item[2] ?? '') === $slug) {
+                return is_int($key) || is_float($key) ? $key : (int) $key;
+            }
+        }
+
+        return null;
     }
 }
