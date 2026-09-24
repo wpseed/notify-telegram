@@ -264,8 +264,8 @@ resolved package set — so two plugins that resolve to the same packages genera
 name**, and the second one to load kills the site with
 `Cannot redeclare class ComposerAutoloaderInit…`. Verified: with the default suffix, activating the
 built copy next to the source plugin produced exactly that fatal error. A per-plugin suffix fixes
-it, and `bin/new-plugin` rewrites the suffix along with the rest of the template, so plugins built
-from this template never collide with each other. Two copies of the *same* plugin (a dev tree and
+it, and the lab's `bin/new-plugin` sets one when a plugin is created from the template, so plugins
+built that way never collide with each other. Two copies of the *same* plugin (a dev tree and
 its own `dist/` build) still share the name by design — do not run both at once.
 
 ### What was verified on this host
@@ -292,9 +292,10 @@ pushed (a manual run uploads it as a build artifact instead). One prerequisite: 
 must be its own repository with `.github/` at its root — a plugin sitting in a subdirectory
 of the lab repository is never built by GitHub.
 
-**`composer.lock` is git-ignored in this template**, so a CI build resolves dependencies
-fresh every time. Commit the lock file in the plugin repository if you want reproducible
-archives.
+**`composer.lock` is git-ignored here** — the dependencies are needed for development and
+tests only — so a CI build resolves the dev toolchain fresh every time. That cannot change
+what the archive carries today (it holds no third-party code), but commit the lock file if
+that ever changes.
 
 ## Pitfalls worth knowing (verified in practice)
 
