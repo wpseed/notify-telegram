@@ -88,20 +88,21 @@ page per tab.
 
 ### The menu entry
 
-One entry, and `AdminPage::MENU_POSITION` is the only knob for where it sits: 3 puts it directly under
-Dashboard, while core's own sections are at 4 (a separator), 10 (Media), 20 (Pages), 60 (Appearance),
-65 (Plugins), 75 (Tools) and 80 (Settings) — a plugin that passes no position at all lands after them.
-A number another plugin already took costs nothing: core offsets the later registration by a fraction,
-so both entries stay reachable.
+One entry, and `AdminPage::MENU_POSITION` is the only knob for where it sits: `75.9` gives it its own
+slot under Tools (75) and above Settings (80), while core's other sections are at 4 (a separator),
+10 (Media), 20 (Pages), 60 (Appearance), 65 (Plugins) and 70 (Users) — a plugin that passes no position
+at all lands after all of them. Move the number to move the entry: 3 is directly under Dashboard, 59.9
+just above Appearance. A position another plugin has already taken costs nothing: core checks the key
+before writing and gives the later registration a small offset instead of a shared slot, which is why
+positions live in the menu as string keys and why a float is a legitimate value here.
 
-The icon is the plugin's own rather than a dashicon. `assets/icon.svg` is a Telegram-blue tile with a
-white bell; `AdminPage::icon()` reads it and hands WordPress a `data:image/svg+xml;base64,…` URI. That
-form is the one core treats specially — it sets the `svg` class on the menu image and uses the value as
-a `background-image` (`wp-admin/menu-header.php`) — and it is the only form that keeps a colour of its
-own: a dashicon is recoloured by core (`div.wp-menu-image:before`) and again by every colour scheme, and
-an SVG passed as a URL renders as a plain `<img>` at 60% opacity. Change the two `fill` values in
-`assets/icon.svg` to change the palette; nothing else has to be touched, the file is read per admin
-request, and a missing file falls back to a dashicon instead of an empty menu column.
+The icon is the core bell (`dashicons-bell`), so the entry is painted by the admin colour scheme exactly
+like the rest of the sidebar — including the dimmed state, the hover colour and the highlight of the open
+screen, none of which an image of our own would follow. `AdminPage::ICON` is the one place to change it:
+any `dashicons-*` class works, and WordPress renders it through `div.wp-menu-image:before`
+(`wp-admin/menu-header.php`). An icon of our own is possible — a `data:image/svg+xml;base64,…` URI is the
+one form core special-cases, and it keeps whatever palette the SVG declares — but that icon then ignores
+the colour scheme entirely, so it is not what ships here.
 
 PHP prints the WordPress heading, the description and the mount element; the application fills the mount
 element and nothing else. The lab's `starter-plugin` keeps a working reference of the build setup —

@@ -39,29 +39,20 @@ final class AdminPageTest extends WP_UnitTestCase
         self::assertSame('Notify Telegram', self::menu_label(AdminPage::MENU_SLUG));
     }
 
-    public function test_the_menu_icon_is_a_base64_svg_carrying_its_own_palette(): void
+    public function test_the_menu_icon_is_the_core_bell(): void
     {
-        $icon = self::menu_icon(AdminPage::MENU_SLUG);
-        $prefix = 'data:image/svg+xml;base64,';
-
-        // Core renders exactly this form as a `.wp-menu-image.svg` background image and never recolours
-        // it, which is what keeps the icon's own colours in every admin colour scheme.
-        self::assertSame($prefix, substr($icon, 0, strlen($prefix)));
-
-        $svg = (string) base64_decode(substr($icon, strlen($prefix)), true);
-
-        self::assertStringContainsString('<svg', $svg);
-
-        preg_match_all('/fill="([^"]+)"/', $svg, $matches);
-
-        // Three shapes, two colours of our own: core keeps whatever the SVG declares, which is the
-        // whole point of shipping an icon as a data URI instead of a dashicon.
-        self::assertSame(['#229ED9', '#ffffff', '#ffffff'], $matches[1]);
+        // A dashicon: core paints it through `div.wp-menu-image:before`, so the entry follows the
+        // colour scheme like every other item in the sidebar instead of carrying colours of its own.
+        self::assertSame('dashicons-bell', self::menu_icon(AdminPage::MENU_SLUG));
     }
 
-    public function test_the_entry_sits_directly_under_the_dashboard(): void
+    public function test_the_entry_sits_under_tools(): void
     {
+        // Core keeps the position as the array key, cast to a string so that a float survives
+        // ("75.9"); the helper reads it back the same way.
         self::assertSame(AdminPage::MENU_POSITION, self::menu_position(AdminPage::MENU_SLUG));
+        self::assertGreaterThan(75, self::menu_position(AdminPage::MENU_SLUG), 'the entry should follow Tools');
+        self::assertLessThan(80, self::menu_position(AdminPage::MENU_SLUG), 'the entry should precede Settings');
     }
 
     public function test_the_menu_has_no_submenu_items(): void
@@ -235,7 +226,9 @@ final class AdminPageTest extends WP_UnitTestCase
     {
         foreach (is_array($GLOBALS['menu']) ? $GLOBALS['menu'] : [] as $key => $item) {
             if (($item[2] ?? '') === $slug) {
-                return is_int($key) || is_float($key) ? $key : (int) $key;
+                // Read the key back as a number: core keeps the position as a string key so that a
+                // float position survives, and a plain (int) cast would truncate "75.9" to 75.
+                return is_numeric($key) ? $key + 0 : null;
             }
         }
 
