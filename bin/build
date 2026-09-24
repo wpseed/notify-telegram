@@ -46,14 +46,14 @@ $archive = $root . '/dist/' . $slug . '.zip';
 
 // The admin screen is a React application: assets/admin/ is built by npm and has to be in the
 // archive, or the installed plugin would show an empty page. The sources (admin-ui/) are not.
-if (!is_readable($root . '/assets/admin/.vite/manifest.json')) {
+if (!is_readable($root . '/assets/admin/manifest.json')) {
 	fwrite(STDERR, "The admin bundle is missing — run: npm ci && npm run build\n");
 	exit(1);
 }
 
 // A stale bundle ships a stale screen, and nothing else would notice: the manifest only records
 // hashed file names, not when they were produced.
-$bundle_time = (int) filemtime($root . '/assets/admin/.vite/manifest.json');
+$bundle_time = (int) filemtime($root . '/assets/admin/manifest.json');
 $source_time = 0;
 
 $admin_ui = new RecursiveIteratorIterator(
@@ -81,7 +81,7 @@ if ($source_time > $bundle_time) {
 
 // wp_enqueue_script() prints a classic <script>, and a classic script cannot parse an ES module —
 // it fails silently, leaving the screen empty with nothing but a console error.
-$manifest = json_decode((string) file_get_contents($root . '/assets/admin/.vite/manifest.json'), true);
+$manifest = json_decode((string) file_get_contents($root . '/assets/admin/manifest.json'), true);
 $entry = '';
 
 foreach ((array) $manifest as $asset) {
@@ -251,6 +251,25 @@ function list_files( string $path ): array {
 	return $files;
 }
 
+/**
+ * Files below a directory as paths relative to it, with forward slashes.
+ *
+ * @param string $path Directory to list.
+ * @param string $root Directory the paths are made relative to.
+ * @return list<string>
+ */
+function relative_files( string $path, string $root ): array {
+	$relative = array();
+
+	foreach ( list_files( $path ) as $file ) {
+		$relative[] = str_replace( '\\', '/', substr( $file, strlen( $root ) + 1 ) );
+	}
+
+	sort( $relative );
+
+	return $relative;
+}
+
 $composer = composer_command();
 
 echo "Plugin: {$slug}\n";
@@ -292,7 +311,31 @@ run(
 	)
 );
 
-// 4. The prefixed copy needs its own autoloader, built from the rewritten composer.json.
+// 4. PHP-Scoper collects its files with Symfony Finder, whose default is to skip dot-files — so a
+// dot-directory of the build (Vite's manifest used to live in assets/<dir>/.vite/) silently
+// disappeared from the archive and an installed copy came up with an empty screen. Whatever the
+// scoper left out is copied over here, and the last step refuses to ship an incomplete artifact.
+$dropped = array_values( array_diff( relative_files( $scratch, $scratch ), relative_files( $output, $output ) ) );
+
+foreach ( $dropped as $relative_path ) {
+	$target = $output . '/' . $relative_path;
+
+	if (!is_dir(dirname($target)) && !mkdir(dirname($target), 0o755, true) && !is_dir(dirname($target))) {
+		fwrite(STDERR, 'Cannot create ' . dirname($target) . "\n");
+		exit(1);
+	}
+
+	if (!copy($scratch . '/' . $relative_path, $target)) {
+		fwrite(STDERR, "Cannot copy {$relative_path} into the artifact\n");
+		exit(1);
+	}
+}
+
+if (array() !== $dropped) {
+	echo 'Left out by PHP-Scoper, copied over: ', implode(', ', $dropped), "\n";
+}
+
+// 5. The prefixed copy needs its own autoloader, built from the rewritten composer.json.
 run( array_merge( $composer, array( 'dump-autoload', '--working-dir=' . $output, '--classmap-authoritative' ) ) );
 
 // Composer metadata is only needed while generating that autoloader.
@@ -300,6 +343,16 @@ foreach ( array( $output . '/composer.json', $output . '/composer.lock' ) as $me
 	if ( is_file( $metadata ) ) {
 		unlink( $metadata );
 	}
+}
+
+// 6. The artifact carries every file of the scratch copy except that metadata. A silent drop is
+// exactly the bug nobody notices until the installed plugin is broken, so it fails the build here.
+$expected = array_values(array_diff(relative_files($scratch, $scratch), array('composer.json', 'composer.lock')));
+$missing  = array_values(array_diff($expected, relative_files($output, $output)));
+
+if (array() !== $missing) {
+	fwrite(STDERR, 'The artifact is incomplete, missing: ' . implode(', ', $missing) . "\n");
+	exit(1);
 }
 
 remove_tree( $scratch );

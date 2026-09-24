@@ -173,7 +173,7 @@ final class AdminPageTest extends WP_UnitTestCase
      */
     private static function skipWithoutBundle(): void
     {
-        if (! is_readable(dirname(__DIR__, 2) . '/assets/admin/.vite/manifest.json')) {
+        if (! is_readable(dirname(__DIR__, 2) . '/assets/admin/manifest.json')) {
             self::markTestSkipped('The admin bundle is not built (run "npm run build").');
         }
     }

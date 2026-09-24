@@ -21,8 +21,11 @@ export default defineConfig( {
 		// Flat output: assets/admin/main-<hash>.js instead of a second nested assets/ level.
 		assetsDir: '',
 
-		// The PHP side reads assets/admin/.vite/manifest.json to enqueue the hashed entry file.
-		manifest: true,
+		// The manifest lands at assets/<dir>/manifest.json, at the top of the output directory and without
+		// a dot in its name. Vite's own default is assets/<dir>/.vite/manifest.json, and PHP-Scoper —
+		// which the archive build runs the tree through — collects its files with Symfony Finder, whose
+		// default is to skip dot-files: the manifest disappeared from the shipped plugin silently.
+		manifest: 'manifest.json',
 
 		rollupOptions: {
 			input: 'admin-ui/main.jsx',
