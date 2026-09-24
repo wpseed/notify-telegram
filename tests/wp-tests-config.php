@@ -36,7 +36,7 @@ if ($core_dir === '') {
 }
 
 if ($core_dir === '') {
-    fwrite(STDERR, "WordPress core not found. Set WP_CORE_DIR (for example, C:/projects/wordpress/web/wp).\n");
+    fwrite(STDERR, "WordPress core not found. Set WP_CORE_DIR (for example, C:/site/web/wp).\n");
     exit(1);
 }
 
