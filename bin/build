@@ -1,0 +1,329 @@
+#!/usr/bin/env php
+<?php
+/**
+ * Builds the installable plugin archive.
+ *
+ * 1. copies the plugin into build-src/, leaving out the development-only files;
+ * 2. installs the runtime dependencies there (composer install --no-dev);
+ * 3. prefixes their namespaces with PHP-Scoper into dist/<slug>/;
+ * 4. regenerates that copy's autoloader, strips the leftover Composer metadata and zips it.
+ *
+ * Usage: composer build      (equivalently: php bin/build)
+ *
+ * The source tree is never modified: the prefixed code lives in dist/ only.
+ *
+ * @package NotifyTelegram
+ */
+
+declare(strict_types=1);
+
+const EXCLUDED_FROM_ARTIFACT = array(
+	'.git',
+	'.github',
+	'.gitignore',
+	'.phpunit.cache',
+	'admin-ui',
+	'node_modules',
+	'package.json',
+	'package-lock.json',
+	'bin',
+	'build-src',
+	'dist',
+	'tests',
+	'composer.lock',
+	'phpcs.xml.dist',
+	'phpunit.xml.dist',
+	'README.md',
+	'scoper.inc.php',
+	'vite.config.mjs',
+);
+
+$root = dirname(__DIR__);
+$slug = basename($root);
+$scratch = $root . '/build-src';
+$output = $root . '/dist/' . $slug;
+$archive = $root . '/dist/' . $slug . '.zip';
+
+// The admin screen is a React application: assets/admin/ is built by npm and has to be in the
+// archive, or the installed plugin would show an empty page. The sources (admin-ui/) are not.
+if (!is_readable($root . '/assets/admin/.vite/manifest.json')) {
+	fwrite(STDERR, "The admin bundle is missing — run: npm ci && npm run build\n");
+	exit(1);
+}
+
+// A stale bundle ships a stale screen, and nothing else would notice: the manifest only records
+// hashed file names, not when they were produced.
+$bundle_time = (int) filemtime($root . '/assets/admin/.vite/manifest.json');
+$source_time = 0;
+
+$admin_ui = new RecursiveIteratorIterator(
+	new RecursiveDirectoryIterator($root . '/admin-ui', FilesystemIterator::SKIP_DOTS)
+);
+
+foreach ($admin_ui as $source) {
+	if ($source->isFile() && $source->getMTime() > $source_time) {
+		$source_time = $source->getMTime();
+	}
+}
+
+foreach (array('/package.json', '/vite.config.mjs') as $config) {
+	$config_time = filemtime($root . $config);
+
+	if (false !== $config_time && $config_time > $source_time) {
+		$source_time = $config_time;
+	}
+}
+
+if ($source_time > $bundle_time) {
+	fwrite(STDERR, "The admin bundle is older than its sources — run: npm run build\n");
+	exit(1);
+}
+
+// wp_enqueue_script() prints a classic <script>, and a classic script cannot parse an ES module —
+// it fails silently, leaving the screen empty with nothing but a console error.
+$manifest = json_decode((string) file_get_contents($root . '/assets/admin/.vite/manifest.json'), true);
+$entry = '';
+
+foreach ((array) $manifest as $asset) {
+	if (!empty($asset['isEntry']) && !empty($asset['file'])) {
+		$entry = (string) $asset['file'];
+		break;
+	}
+}
+
+$bundle_file = '' !== $entry ? $root . '/assets/admin/' . $entry : '';
+
+if ('' !== $bundle_file && is_readable($bundle_file)
+	&& preg_match('/\bexport\s*\{|^import\s/m', (string) file_get_contents($bundle_file))
+) {
+	fwrite(STDERR, "The admin bundle is an ES module, but WordPress loads it as a classic script:\n");
+	fwrite(STDERR, "set build.rollupOptions.output.format to 'iife' in vite.config.mjs.\n");
+	exit(1);
+}
+
+/**
+ * Runs a command without a shell, streaming its output.
+ *
+ * @param list<string> $command Command and arguments.
+ * @param string|null  $cwd     Working directory.
+ * @return void
+ */
+function run( array $command, ?string $cwd = null ): void {
+	echo '$ ', implode( ' ', $command ), "\n";
+
+	$process = proc_open(
+		$command,
+		array( 0 => STDIN, 1 => STDOUT, 2 => STDERR ),
+		$pipes,
+		$cwd
+	);
+
+	if ( ! is_resource( $process ) ) {
+		fwrite( STDERR, "Failed to start: " . implode( ' ', $command ) . "\n" );
+		exit( 1 );
+	}
+
+	$status = proc_close( $process );
+
+	if ( 0 !== $status ) {
+		fwrite( STDERR, "Command failed with exit code {$status}\n" );
+		exit( $status );
+	}
+}
+
+/**
+ * Locates the composer binary: $COMPOSER_BIN, then PATH, then the Laravel Herd phar.
+ *
+ * @return list<string>
+ */
+function composer_command(): array {
+	$configured = getenv( 'COMPOSER_BIN' );
+
+	if ( is_string( $configured ) && '' !== $configured ) {
+		return array( $configured );
+	}
+
+	$probe = @shell_exec( 'composer --version 2>&1' );
+
+	if ( is_string( $probe ) && str_contains( $probe, 'Composer version' ) ) {
+		return array( 'composer' );
+	}
+
+	$home = getenv( 'HOME' ) ?: getenv( 'USERPROFILE' );
+	$phar = $home . '/.config/herd/bin/composer.phar';
+
+	if ( is_string( $home ) && '' !== $home && is_readable( $phar ) ) {
+		return array( PHP_BINARY, $phar );
+	}
+
+	fwrite( STDERR, "composer not found: put it on PATH or set COMPOSER_BIN.\n" );
+	exit( 1 );
+}
+
+/**
+ * Recursively copies a directory.
+ *
+ * @param string $from Source directory.
+ * @param string $to   Destination directory.
+ * @return void
+ */
+function copy_tree( string $from, string $to ): void {
+	if ( ! is_dir( $to ) && ! mkdir( $to, 0o755, true ) && ! is_dir( $to ) ) {
+		fwrite( STDERR, "Cannot create {$to}\n" );
+		exit( 1 );
+	}
+
+	$entries = scandir( $from );
+
+	foreach ( false === $entries ? array() : $entries as $entry ) {
+		if ( '.' === $entry || '..' === $entry ) {
+			continue;
+		}
+
+		$source = $from . '/' . $entry;
+		$target = $to . '/' . $entry;
+
+		if ( is_dir( $source ) ) {
+			copy_tree( $source, $target );
+			continue;
+		}
+
+		copy( $source, $target );
+	}
+}
+
+/**
+ * Recursively deletes a directory.
+ *
+ * @param string $path Directory.
+ * @return void
+ */
+function remove_tree( string $path ): void {
+	if ( ! is_dir( $path ) ) {
+		return;
+	}
+
+	$entries = scandir( $path );
+
+	foreach ( false === $entries ? array() : $entries as $entry ) {
+		if ( '.' === $entry || '..' === $entry ) {
+			continue;
+		}
+
+		$item = $path . '/' . $entry;
+
+		if ( is_dir( $item ) ) {
+			remove_tree( $item );
+			continue;
+		}
+
+		unlink( $item );
+	}
+
+	rmdir( $path );
+}
+
+/**
+ * Recursively lists files below a directory.
+ *
+ * @param string $path Directory.
+ * @return list<string>
+ */
+function list_files( string $path ): array {
+	$files = array();
+	$entries = scandir( $path );
+
+	foreach ( false === $entries ? array() : $entries as $entry ) {
+		if ( '.' === $entry || '..' === $entry ) {
+			continue;
+		}
+
+		$item = $path . '/' . $entry;
+
+		if ( is_dir( $item ) ) {
+			$files = array_merge( $files, list_files( $item ) );
+			continue;
+		}
+
+		$files[] = $item;
+	}
+
+	return $files;
+}
+
+$composer = composer_command();
+
+echo "Plugin: {$slug}\n";
+echo "Source: {$root}\n\n";
+
+// 1. A scratch copy without the development-only files.
+remove_tree( $scratch );
+remove_tree( $output );
+mkdir( $scratch, 0o755, true );
+
+foreach ( scandir( $root ) as $entry ) {
+	if ( '.' === $entry || '..' === $entry || in_array( $entry, EXCLUDED_FROM_ARTIFACT, true ) ) {
+		continue;
+	}
+
+	$source = $root . '/' . $entry;
+
+	if ( is_dir( $source ) ) {
+		copy_tree( $source, $scratch . '/' . $entry );
+		continue;
+	}
+
+	copy( $source, $scratch . '/' . $entry );
+}
+
+// 2. Runtime dependencies only — nothing dev-related ends up in the artifact.
+run( array_merge( $composer, array( 'install', '--no-dev', '--prefer-dist', '--no-interaction', '--optimize-autoloader' ) ), $scratch );
+
+// 3. Prefix the namespaces (PHP-Scoper, config in scoper.inc.php).
+run(
+	array(
+		PHP_BINARY,
+		$root . '/vendor/bin/php-scoper',
+		'add-prefix',
+		$scratch,
+		'--output-dir=' . $output,
+		'--config=' . $root . '/scoper.inc.php',
+		'--force',
+	)
+);
+
+// 4. The prefixed copy needs its own autoloader, built from the rewritten composer.json.
+run( array_merge( $composer, array( 'dump-autoload', '--working-dir=' . $output, '--classmap-authoritative' ) ) );
+
+// Composer metadata is only needed while generating that autoloader.
+foreach ( array( $output . '/composer.json', $output . '/composer.lock' ) as $metadata ) {
+	if ( is_file( $metadata ) ) {
+		unlink( $metadata );
+	}
+}
+
+remove_tree( $scratch );
+
+$files = list_files( $output );
+
+echo "\nBuilt ", count( $files ), " files into ", $output, "\n";
+
+if ( ! class_exists( ZipArchive::class ) ) {
+	echo "ZipArchive is not available: zip the directory above yourself.\n";
+	exit( 0 );
+}
+
+$zip = new ZipArchive();
+
+if ( true !== $zip->open( $archive, ZipArchive::CREATE | ZipArchive::OVERWRITE ) ) {
+	fwrite( STDERR, "Cannot create {$archive}\n" );
+	exit( 1 );
+}
+
+foreach ( $files as $file ) {
+	$zip->addFile( $file, $slug . '/' . substr( $file, strlen( $output ) + 1 ) );
+}
+
+$zip->close();
+
+echo "Archive: ", $archive, ' (', number_format( filesize( $archive ) / 1024, 1 ), " KiB)\n";

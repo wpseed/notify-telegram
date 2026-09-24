@@ -1,0 +1,57 @@
+/**
+ * Thin wrapper around the plugin's REST API.
+ *
+ * The root URL and the nonce come from PHP (window.starterPluginAdmin), so the app never hardcodes
+ * a path and always sends the cookie-authenticated request WordPress expects.
+ */
+
+/**
+ * Performs a JSON request against the plugin's REST namespace.
+ *
+ * @param {string} path    Path below the namespace root, e.g. '/settings'.
+ * @param {Object} options fetch() options.
+ * @return {Promise<Object>} Parsed response body.
+ */
+export async function request( path, options = {} ) {
+	const { apiRoot, nonce } = window.starterPluginAdmin ?? {};
+
+	const response = await fetch( `${ apiRoot }${ path }`, {
+		credentials: 'same-origin',
+		...options,
+		headers: {
+			'Content-Type': 'application/json',
+			'X-WP-Nonce': nonce,
+			...( options.headers ?? {} ),
+		},
+	} );
+
+	const payload = await response.json().catch( () => null );
+
+	if ( ! response.ok ) {
+		throw new Error( payload?.message ?? `Request failed with status ${ response.status }.` );
+	}
+
+	return payload;
+}
+
+/**
+ * Reads the plugin settings.
+ *
+ * @return {Promise<Object>} Settings object.
+ */
+export function getSettings() {
+	return request( '/settings' );
+}
+
+/**
+ * Stores the plugin settings.
+ *
+ * @param {Object} settings Settings to store.
+ * @return {Promise<Object>} Settings as saved by the server.
+ */
+export function saveSettings( settings ) {
+	return request( '/settings', {
+		method: 'POST',
+		body: JSON.stringify( settings ),
+	} );
+}

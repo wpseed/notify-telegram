@@ -1,0 +1,53 @@
+name: PHP floor
+
+# Keeps `Requires PHP: 8.2` honest.
+#
+# The phpcs `testVersion` gate cannot do this job: the stable PHPCompatibility line flags removed or
+# older API, not syntax newer than the floor — verified that it accepts `readonly class`, typed class
+# constants, DNF types and `json_validate()` silently at testVersion 8.0-, 8.1-, 8.2- and 8.3-. A real
+# PHP 8.2 rejects them, so the plugin is installed and linted on the floor version here.
+#
+# What this does NOT cover: functions and behaviour that exist only in newer PHP pass `php -l`.
+# Catching those needs the test suite running on 8.2, which needs the WordPress test suite and a
+# MySQL service — a deliberately separate, bigger step.
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  php-floor:
+    name: Install and lint on PHP 8.2
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out the plugin
+        uses: actions/checkout@v4
+
+      # Keep in sync with composer.json `require.php`, the plugin header, phpcs `testVersion`
+      # and `config.platform.php`.
+      - name: Set up PHP 8.2
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          coverage: none
+          tools: composer
+
+      # Resolution is part of the check: with config.platform.php pinned to 8.2 a dependency that
+      # needs a newer PHP fails here, not on a customer's site.
+      - name: Install the dependencies on the floor version
+        run: composer install --no-interaction --no-progress --prefer-dist
+
+      # Exits non-zero when any installed package — runtime or dev — wants a newer PHP.
+      - name: Assert that every installed package accepts PHP 8.2
+        run: composer why-not php 8.2.0
+
+      # Lints what actually ships (the plugin file and src/), not the third-party vendor tree.
+      - name: Lint the shipped files with PHP 8.2
+        run: |
+          while IFS= read -r file; do
+            php -l "$file" > /dev/null || exit 1
+          done < <(find notify-telegram.php src -name '*.php' -type f)

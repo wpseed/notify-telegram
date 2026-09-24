@@ -1,0 +1,9 @@
+/**
+ * The screen is rendered inside the WordPress admin, so these rules only touch the plugin's own
+ * container: no global resets, no changes to WordPress styles.
+ */
+
+#notify-telegram-admin-root {
+	max-width: 760px;
+	margin: 16px 0;
+}

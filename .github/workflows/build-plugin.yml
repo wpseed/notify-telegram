@@ -1,0 +1,65 @@
+name: Build plugin archive
+
+# The shippable archive is built here: `npm run build` produces the React admin bundle into
+# assets/admin/, then `composer build` installs the runtime dependencies, prefixes their namespaces
+# with PHP-Scoper and zips the result. The same commands work on the Windows dev machine (PHP-Scoper
+# runs there), so CI is convenience, not the only path.
+#
+# Triggers: a pushed version tag (v1.2.3) or a manual run from the Actions tab.
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write # to attach the archive to the release created for the tag
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out the plugin
+        uses: actions/checkout@v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          coverage: none
+          tools: composer
+
+      # bin/build needs its own tooling (PHP-Scoper) plus the plugin's runtime dependencies.
+      - name: Install development dependencies
+        run: composer install --no-interaction --no-progress --prefer-dist
+
+      # The admin screen is a React application, and bin/build refuses to ship a plugin whose bundle
+      # is missing, so assets/admin/ has to be built before the archive.
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install the front-end dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Build the admin bundle
+        run: npm run build
+
+      # Produces dist/notify-telegram/ (the prefixed plugin) and dist/notify-telegram.zip.
+      - name: Build the archive
+        run: composer build
+
+      - name: Upload the archive as a build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: notify-telegram
+          path: dist/notify-telegram.zip
+
+      - name: Attach the archive to the release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/notify-telegram.zip

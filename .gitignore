@@ -1,0 +1,17 @@
+# Composer (the dependencies are needed for development and tests only)
+/vendor
+composer.lock
+
+# PHP-Scoper build output and its scratch copy
+/dist
+/build-src
+/build
+
+# Tests
+/.phpunit.cache
+/phpunit.xml
+.phpunit.result.cache
+
+# Front-end sources and the built admin bundle (npm run build; the release archive gets it in CI)
+/node_modules
+/assets/admin
