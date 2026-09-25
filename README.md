@@ -22,6 +22,7 @@ incoming webhook. Scaffolded from the lab's `starter-plugin` template: namespace
 | `bin/build` | Archive builder (`composer build`): a copy without the development files + zip into `dist/` |
 | `.github/workflows/build-plugin.yml` | The same build in CI, triggered by a version tag |
 | `.github/workflows/php-floor.yml` | The PHP floor check: install and lint on 8.2, on every push |
+| `readme.txt` | The listing in the plugin directory: header, description, FAQ, changelog — checked with the directory's own readme validator |
 | `tests/unit/` | Fast unit tests (PHPUnit, WordPress is not loaded) |
 | `tests/integration/` | Integration tests (`WP_UnitTestCase`, real WordPress + MySQL) |
 
