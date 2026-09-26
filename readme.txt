@@ -3,7 +3,7 @@ Contributors: wpseed
 Tags: telegram, notifications, webhook, email, monitoring
 Requires at least: 6.5
 Tested up to: 7.1
-Stable tag: 0.2.0
+Stable tag: 0.1.0
 Requires PHP: 8.2
 License: MIT
 License URI: https://opensource.org/licenses/MIT
@@ -129,7 +129,7 @@ In two options: `notify_telegram_settings` (channels, events and templates) and 
 
 == Changelog ==
 
-= 0.2.0 =
+= 0.1.0 =
 * First release.
 * Channels: Telegram (several chats per bot), email and webhook.
 * Events: new user registration, failed login with the client IP, published comment.
@@ -140,5 +140,5 @@ In two options: `notify_telegram_settings` (channels, events and templates) and 
 
 == Upgrade Notice ==
 
-= 0.2.0 =
+= 0.1.0 =
 First release.

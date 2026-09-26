@@ -4,7 +4,7 @@
  * Description:       Notifications for WordPress events, delivered to the channels you configure: Telegram,
  *                    email or any incoming webhook. Messages, toggles and the delivery log live under
  *                    Settings → Notify Telegram.
- * Version:           0.2.0
+ * Version:           0.1.0
  * Requires at least: 6.5
  * Requires PHP:      8.2
  * Author:            Plugin Lab
